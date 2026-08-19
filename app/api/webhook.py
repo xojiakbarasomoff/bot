@@ -57,6 +57,37 @@ def _verify_signature(raw_body: bytes, signature_header: str | None, app_secret:
     return hmac.compare_digest(expected, provided)
 
 
+def _signature_failure_detail(
+    raw_body: bytes, signature_header: str | None, app_secret: str
+) -> str:
+    """Log-safe `k=v` detail explaining *why* a signature check failed.
+
+    The app secret never lands in a log line — only its length and a
+    truncated fingerprint, which is enough to tell whether the value
+    deployed on the host is the one you think it is (compare fingerprints
+    across environments) without disclosing it. secret_surrounding_whitespace
+    catches the most common deploy mistake: a value pasted into a hosting
+    dashboard with a trailing newline or wrapping quotes, which silently
+    changes the HMAC while looking identical on screen.
+
+    Formatted into the log *message* rather than passed as `extra=`,
+    unlike the rest of this module: nothing installs a structured log
+    handler, so `extra` fields are dropped by the default uvicorn
+    formatter and would be invisible exactly where this is needed — in a
+    deployed environment's log stream.
+    """
+    expected = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    fields: dict[str, object] = {
+        "expected": f"sha256={expected}",
+        "received": signature_header,
+        "body_length": len(raw_body),
+        "secret_length": len(app_secret),
+        "secret_fingerprint": hashlib.sha256(app_secret.encode("utf-8")).hexdigest()[:8],
+        "secret_surrounding_whitespace": app_secret != app_secret.strip(),
+    }
+    return " ".join(f"{key}={value}" for key, value in fields.items())
+
+
 def _is_echo(event: MessagingEvent, page_id: str) -> bool:
     if event.message is not None and event.message.is_echo:
         return True
@@ -146,7 +177,15 @@ async def receive_webhook(
     signature_header = request.headers.get("x-hub-signature-256")
 
     if not _verify_signature(raw_body, signature_header, settings.meta_app_secret):
-        logger.warning("webhook_signature_invalid")
+        # Detail on the failure path only — a valid request logs nothing
+        # extra. Worth removing once a deployment's signatures line up
+        # again: an expected-signature value in a log stream is a valid
+        # HMAC over that body, so anyone who can read the logs can replay
+        # that exact payload past this check.
+        logger.warning(
+            "webhook_signature_invalid %s",
+            _signature_failure_detail(raw_body, signature_header, settings.meta_app_secret),
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
 
     try:
