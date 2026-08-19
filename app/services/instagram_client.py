@@ -1,0 +1,105 @@
+import logging
+from abc import ABC, abstractmethod
+from contextlib import suppress
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# Meta's Send API only accepts a standard text send within 24h of the user's
+# last message (the "24-hour messaging window"). Outside it, Meta rejects
+# the send unless it carries a message tag (HUMAN_AGENT,
+# CONFIRMED_EVENT_UPDATE, ...) or goes through a paid conversation — neither
+# implemented yet, see is_within_messaging_window's caller in
+# app.workers.tasks for the TODO.
+MESSAGING_WINDOW = timedelta(hours=24)
+
+# Pinned to a concrete version, not an alias, for the same reproducibility
+# reason GeminiLLMProvider pins its model (see app/rag/llm.py) — an alias
+# like "latest" can change Graph API behavior under us without any change on
+# our side.
+GRAPH_API_VERSION = "v21.0"
+GRAPH_API_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+
+# channel.credentials is NOT NULL, so a not-yet-configured channel can't be
+# stored as a real NULL — these sentinel strings are what ops seed a channel
+# with before the real Instagram token lands (still blocked as of writing),
+# so the pipeline can tell "no real token" apart from "garbage token" and
+# skip sending instead of hammering Meta with 401s.
+_PLACEHOLDER_CREDENTIALS = frozenset({"", "placeholder", "todo", "changeme", "pending"})
+
+
+def is_placeholder_credential(credentials: str) -> bool:
+    return credentials.strip().lower() in _PLACEHOLDER_CREDENTIALS
+
+
+def is_within_messaging_window(
+    last_user_message_at: datetime, *, now: datetime | None = None
+) -> bool:
+    """Whether a standard text send is still allowed under Meta's 24-hour
+    messaging window. Pure function so the boundary is unit-testable without
+    a real clock or a real client.
+    """
+    current = now or datetime.now(UTC)
+    return current - last_user_message_at <= MESSAGING_WINDOW
+
+
+class InstagramSendError(Exception):
+    """Raised when the Instagram Graph API rejects or fails a send request."""
+
+
+class InstagramClient(ABC):
+    """Abstraction over "send a text message to an Instagram user via the
+    Send API", mirroring LLMProvider/EmbeddingProvider (app/rag/llm.py,
+    app/rag/embeddings.py) so the transport can be swapped for a test double
+    without touching callers.
+
+    Deliberately dumb: this only knows how to make the HTTP call. The
+    24-hour messaging window and token-configured checks are business rules,
+    not transport concerns, so they live in the caller (app.workers.tasks),
+    the same way EmbeddingProvider doesn't know about retrieval thresholds.
+    """
+
+    @abstractmethod
+    async def send_text(self, *, access_token: str, recipient_igsid: str, text: str) -> None:
+        """Send a text message to recipient_igsid, authenticated with access_token.
+
+        Raises InstagramSendError on any non-2xx response.
+        """
+
+
+class GraphAPIInstagramClient(InstagramClient):
+    """Real implementation: POSTs to the Graph API's /me/messages endpoint."""
+
+    def __init__(self, *, base_url: str = GRAPH_API_BASE_URL, timeout: float = 10.0) -> None:
+        self._http = httpx.AsyncClient(base_url=base_url, timeout=timeout)
+
+    async def send_text(self, *, access_token: str, recipient_igsid: str, text: str) -> None:
+        response = await self._http.post(
+            "/me/messages",
+            params={"access_token": access_token},
+            json={"recipient": {"id": recipient_igsid}, "message": {"text": text}},
+        )
+        if response.is_error:
+            error_code: object = None
+            with suppress(ValueError):
+                error_code = response.json().get("error", {}).get("code")
+            # Response body withheld from the log: Meta's error payloads can
+            # echo request params (including access_token) back in the copy.
+            # Status + error code is enough to act on.
+            logger.error(
+                "instagram_send_failed",
+                extra={
+                    "recipient_igsid": recipient_igsid,
+                    "status_code": response.status_code,
+                    "error_code": error_code,
+                },
+            )
+            raise InstagramSendError(f"Instagram send failed with status {response.status_code}")
+
+
+@lru_cache
+def get_instagram_client() -> InstagramClient:
+    return GraphAPIInstagramClient()

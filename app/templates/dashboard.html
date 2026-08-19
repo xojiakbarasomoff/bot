@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Clinic Dashboard — {{ selected_date.isoformat() }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f4f5f7; margin: 0; color: #1f2937; }
+    header { background: #fff; padding: 1rem 1.5rem; display: flex; justify-content: space-between;
+              align-items: center; border-bottom: 1px solid #e5e7eb; }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    header .who { font-size: .85rem; color: #6b7280; }
+    header button { background: none; border: 1px solid #d1d5db; border-radius: 4px; padding: .35rem .75rem;
+                    cursor: pointer; }
+    main { max-width: 48rem; margin: 1.5rem auto; padding: 0 1rem; }
+    .nav { display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem; }
+    .nav a { text-decoration: none; color: #2563eb; font-size: .9rem; }
+    .nav input[type="date"] { padding: .3rem; border: 1px solid #d1d5db; border-radius: 4px; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    th, td { text-align: left; padding: .6rem .75rem; border-bottom: 1px solid #eee; font-size: .9rem; }
+    th { background: #fafafa; color: #6b7280; font-weight: 600; font-size: .78rem; text-transform: uppercase; }
+    tr:last-child td { border-bottom: none; }
+    .status { padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; }
+    .status-scheduled { background: #dbeafe; color: #1e40af; }
+    .status-cancelled { background: #f3f4f6; color: #6b7280; text-decoration: line-through; }
+    .status-completed { background: #dcfce7; color: #166534; }
+    .status-no_show { background: #fee2e2; color: #991b1b; }
+    .empty { color: #9ca3af; padding: 1.5rem; text-align: center; }
+    .error { background: #fee2e2; color: #991b1b; padding: .6rem .9rem; border-radius: 6px;
+              font-size: .88rem; margin-bottom: 1rem; }
+    .book { margin-top: 1.5rem; background: #fff; padding: 1.25rem; border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+    .book h2 { font-size: .95rem; margin: 0 0 .75rem; }
+    .book .row { display: flex; gap: .6rem; }
+    .book label { display: block; font-size: .78rem; color: #6b7280; margin-bottom: .2rem; }
+    .book input { padding: .45rem; border: 1px solid #d1d5db; border-radius: 4px; }
+    .book input[name="patient_name"] { flex: 1; }
+    .book button { margin-top: .9rem; padding: .5rem 1rem; border: none; border-radius: 4px;
+                   background: #2563eb; color: #fff; cursor: pointer; }
+    form.cancel-form { display: inline; }
+    .cancel-btn { border: none; background: none; color: #b91c1c; cursor: pointer; font-size: .82rem;
+                  text-decoration: underline; padding: 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Clinic Dashboard</h1>
+    <div class="who">
+      {{ operator.name }} ({{ operator.role }})
+      <form method="post" action="/logout" style="display:inline">
+        <button type="submit">Log out</button>
+      </form>
+    </div>
+  </header>
+
+  <main>
+    <div class="nav">
+      <a href="/dashboard/appointments?date={{ today.isoformat() }}">Today</a>
+      <form method="get" action="/dashboard/appointments">
+        <input type="date" name="date" value="{{ selected_date.isoformat() }}"
+               onchange="this.form.submit()" />
+      </form>
+      <span style="color:#9ca3af; font-size:.8rem;">times shown in Asia/Tashkent</span>
+    </div>
+
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th><th>Patient</th><th>Status</th><th>Source</th>
+          {% if can_manage %}<th></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for appt in appointments %}
+        <tr>
+          <td>{{ appt.time }}</td>
+          <td>{{ appt.patient_name }}</td>
+          <td><span class="status status-{{ appt.status }}">{{ appt.status }}</span></td>
+          <td>{{ appt.source }}</td>
+          {% if can_manage %}
+          <td>
+            {% if appt.status == "scheduled" %}
+            <form class="cancel-form" method="post"
+                  action="/dashboard/appointments/{{ appt.id }}/cancel">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <input type="hidden" name="date" value="{{ selected_date.isoformat() }}" />
+              <button type="submit" class="cancel-btn"
+                      onclick="return confirm('Cancel this appointment?')">Cancel</button>
+            </form>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ can_manage and 5 or 4 }}" class="empty">No appointments this day.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if can_manage %}
+    <div class="book">
+      <h2>Book an appointment</h2>
+      <form method="post" action="/dashboard/appointments">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <input type="hidden" name="date" value="{{ selected_date.isoformat() }}" />
+        <div class="row">
+          <div>
+            <label for="patient_name">Patient name</label>
+            <input id="patient_name" name="patient_name" required />
+          </div>
+          <div>
+            <label for="time">Time</label>
+            <input id="time" name="time" type="time" step="1800" min="09:00" max="18:30" required />
+          </div>
+        </div>
+        <button type="submit">Book</button>
+      </form>
+    </div>
+    {% endif %}
+  </main>
+</body>
+</html>
