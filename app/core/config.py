@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # A config flag fails safe — wrong by default (False, i.e. explicit
     # opt-in) rather than wrong by a proxy-setup mistake.
     session_cookie_secure: bool = Field(default=False, alias="SESSION_COOKIE_SECURE")
+    # Meta signs every webhook delivery, and app.api.webhook rejects a
+    # mismatch with 403. Setting this false downgrades that rejection to a
+    # log line: the check still runs and still reports what it saw, but a
+    # request that fails it is processed anyway. That is a deliberate hole
+    # in the only evidence a webhook actually came from Meta, so it exists
+    # to diagnose a secret mismatch against live traffic -- not as a
+    # resting state. Defaults to enforcing, so the hole is only ever opened
+    # by someone explicitly setting the variable.
+    webhook_signature_enforced: bool = Field(default=True, alias="WEBHOOK_SIGNATURE_ENFORCED")
+
     # TODO(IGB-?): move onto Tenant/per-tenant settings once the admin panel
     # (TZ 4.2) exists, so each clinic can tune its own debounce window
     # instead of every tenant sharing this one value — same pattern as

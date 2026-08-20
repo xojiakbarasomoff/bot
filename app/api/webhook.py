@@ -50,20 +50,6 @@ class WebhookPayload(BaseModel):
 
 
 def _verify_signature(raw_body: bytes, signature_header: str | None, app_secret: str) -> bool:
-    # TEMPORARY - VERIFICATION BYPASSED. Returns True without checking
-    # anything so the deployed bot keeps accepting messages while the
-    # META_APP_SECRET mismatch behind the 403s is tracked down.
-    #
-    # While this early return is here, POST /webhook trusts *any* caller:
-    # anyone who knows the URL can forge a payload and make the bot send
-    # messages to real patients, burn LLM quota, and write fabricated
-    # conversations into the database. Meta's signature is the only thing
-    # that proves a request actually came from Meta.
-    #
-    # To restore the check: delete this comment and the `return True`
-    # below. The real implementation is intact underneath.
-    return True
-
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
@@ -190,17 +176,25 @@ async def receive_webhook(
     raw_body = await request.body()
     signature_header = request.headers.get("x-hub-signature-256")
 
-    if not _verify_signature(raw_body, signature_header, settings.meta_app_secret):
-        # Detail on the failure path only — a valid request logs nothing
-        # extra. Worth removing once a deployment's signatures line up
-        # again: an expected-signature value in a log stream is a valid
-        # HMAC over that body, so anyone who can read the logs can replay
-        # that exact payload past this check.
-        logger.warning(
-            "webhook_signature_invalid %s",
-            _signature_failure_detail(raw_body, signature_header, settings.meta_app_secret),
+    if _verify_signature(raw_body, signature_header, settings.meta_app_secret):
+        # Logged on the way past, not only on failure: while a deployment is
+        # being diagnosed, "the signature matched" is the result being waited
+        # for, and a check that speaks up only when it fails cannot tell a
+        # fixed secret apart from traffic that stopped arriving. The
+        # fingerprint identifies which secret matched without disclosing it.
+        logger.info(
+            "webhook_signature_ok secret_fingerprint=%s",
+            hashlib.sha256(settings.meta_app_secret.encode("utf-8")).hexdigest()[:8],
         )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
+    else:
+        detail = _signature_failure_detail(raw_body, signature_header, settings.meta_app_secret)
+        if settings.webhook_signature_enforced:
+            logger.warning("webhook_signature_invalid %s", detail)
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
+        # Not enforcing: this payload is processed despite failing the check.
+        # A distinct message from the enforced case, so a log search can
+        # prove whether anything was ever let through unverified.
+        logger.warning("webhook_signature_invalid_allowed %s", detail)
 
     try:
         payload = WebhookPayload.model_validate_json(raw_body)

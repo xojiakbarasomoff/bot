@@ -149,6 +149,34 @@ async def test_receive_webhook_with_missing_signature_returns_403(
     assert response.status_code == 403
 
 
+async def test_unenforced_invalid_signature_is_processed_not_rejected(
+    client: httpx.AsyncClient,
+) -> None:
+    """WEBHOOK_SIGNATURE_ENFORCED=false is a diagnostic mode: the check
+    still runs and still reports, but a request that fails it is handled
+    instead of refused. Asserted explicitly because the whole point of the
+    flag is to change the outcome of a failing check, and a regression
+    that silently kept rejecting would look identical from the outside to
+    the flag not being read at all.
+    """
+    unenforced = TEST_SETTINGS.model_copy(update={"webhook_signature_enforced": False})
+    app.dependency_overrides[get_settings] = lambda: unenforced
+    try:
+        body = json.dumps({"object": "instagram", "entry": []}).encode("utf-8")
+        response = await client.post(
+            "/webhook", content=body, headers={"X-Hub-Signature-256": "sha256=" + "0" * 64}
+        )
+    finally:
+        app.dependency_overrides[get_settings] = lambda: TEST_SETTINGS
+    assert response.status_code == 200
+
+
+def test_signature_enforcement_defaults_to_on() -> None:
+    # The insecure mode must never be what you get by forgetting to set
+    # the variable.
+    assert TEST_SETTINGS.webhook_signature_enforced is True
+
+
 async def test_receive_webhook_succeeds_with_no_session_cookie_and_no_csrf_token(
     client: httpx.AsyncClient,
 ) -> None:
