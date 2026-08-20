@@ -33,3 +33,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Stray output from `railway config pull` when the TypeScript SDK is absent.
+.railway-config-pull-*/
