@@ -1,3 +1,6 @@
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -5,8 +8,25 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from app.api import auth_router, dashboard_router, webhook_router
 from app.api.auth import NotAuthenticatedError
+from app.core.config import get_settings
+from app.core.provisioning import provision_channel_if_configured
 
-app = FastAPI(title="Dental Clinic Instagram Assistant")
+# Without this, nothing installs a log handler and Python's fallback emits
+# WARNING and above only -- every logger.info in this codebase (the webhook's
+# per-message trail among them) is discarded before it reaches the platform's
+# log stream, which is the one place anyone reads it.
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Web only: the worker boots from the same image but never imports this
+    # module, so the two processes cannot race to insert the same channel.
+    await provision_channel_if_configured(get_settings())
+    yield
+
+
+app = FastAPI(title="Dental Clinic Instagram Assistant", lifespan=lifespan)
 app.include_router(webhook_router)
 app.include_router(auth_router)
 app.include_router(dashboard_router)

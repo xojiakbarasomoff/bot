@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     # OpenAI key at all — defaulting to openai would fail with a 401 the
     # moment anyone ran this without explicitly setting the provider. openai
     # stays fully implemented and selectable in case we switch back.
+    # The Instagram access token this deployment's channel should carry. Read
+    # here only so first-run provisioning (app.core.provisioning) can seed a
+    # channel with a usable credential; the running pipeline reads the token
+    # from channel.credentials, never from configuration.
+    access_token: str | None = Field(default=None, alias="ACCESS_TOKEN")
+    # Set both to have web startup create the tenant/channel this deployment
+    # serves; see app.core.provisioning for why that lives in the app. Unset
+    # (the default) skips provisioning entirely, and they can be removed once
+    # the rows exist.
+    provision_tenant_name: str | None = Field(default=None, alias="PROVISION_TENANT_NAME")
+    provision_ig_account_id: str | None = Field(default=None, alias="PROVISION_IG_ACCOUNT_ID")
+
     model_provider: Literal["openai", "gemini"] = Field(default="gemini", alias="MODEL_PROVIDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
