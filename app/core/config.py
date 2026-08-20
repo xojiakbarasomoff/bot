@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal, Self
 
 from cryptography.fernet import Fernet
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,6 +56,29 @@ class Settings(BaseSettings):
     model_provider: Literal["openai", "gemini"] = Field(default="gemini", alias="MODEL_PROVIDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def _normalize_database_driver(cls, value: str) -> str:
+        """Rewrite a driverless Postgres URL onto the asyncpg driver.
+
+        app.core.db builds an *async* engine, which needs an explicit
+        async driver in the URL — SQLAlchemy maps a bare `postgresql://`
+        onto psycopg2, which isn't a dependency, so the app would die at
+        startup with NoSuchModuleError. Managed hosts (Railway, Heroku,
+        Fly) inject `postgresql://` (or the older `postgres://` alias) and
+        offer no way to change it, so accepting their value and fixing the
+        scheme here beats hand-assembling the URL from five separate
+        credential variables at every deploy — one mistyped part of which
+        fails in a way that looks nothing like a typo.
+
+        Anything already carrying a driver (`postgresql+asyncpg://`, or a
+        deliberate `postgresql+psycopg://`) is passed through untouched.
+        """
+        for scheme in ("postgresql://", "postgres://"):
+            if value.startswith(scheme):
+                return f"postgresql+asyncpg://{value.removeprefix(scheme)}"
+        return value
 
     @model_validator(mode="after")
     def _require_active_provider_key(self) -> Self:

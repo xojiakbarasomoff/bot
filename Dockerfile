@@ -11,6 +11,12 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 
 COPY pyproject.toml ./
 COPY app ./app
+# alembic.ini and migrations/ are runtime assets, not just dev tooling: the
+# deploy runs `alembic upgrade head` as a pre-deploy step (see
+# railway.json), which executes inside this image and can't find either if
+# they're left out.
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 RUN pip install --no-cache-dir .
 

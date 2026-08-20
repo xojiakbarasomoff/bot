@@ -72,3 +72,42 @@ def test_malformed_encryption_key_raises() -> None:
 def test_valid_encryption_key_is_accepted() -> None:
     settings = Settings(**_BASE_KWARGS, gemini_api_key="test-gemini-key")
     assert settings.encryption_key == _BASE_KWARGS["encryption_key"]
+
+
+# --- database_url driver normalization ---
+
+
+def test_driverless_postgres_url_gets_asyncpg_driver() -> None:
+    settings = Settings(
+        **{**_BASE_KWARGS, "database_url": "postgresql://u:p@host:5432/db"},
+        gemini_api_key="test-gemini-key",
+    )
+    assert settings.database_url == "postgresql+asyncpg://u:p@host:5432/db"
+
+
+def test_legacy_postgres_scheme_gets_asyncpg_driver() -> None:
+    # Some managed hosts still hand out the older `postgres://` alias.
+    settings = Settings(
+        **{**_BASE_KWARGS, "database_url": "postgres://u:p@host:5432/db"},
+        gemini_api_key="test-gemini-key",
+    )
+    assert settings.database_url == "postgresql+asyncpg://u:p@host:5432/db"
+
+
+def test_explicit_driver_is_left_alone() -> None:
+    settings = Settings(
+        **{**_BASE_KWARGS, "database_url": "postgresql+psycopg://u:p@host:5432/db"},
+        gemini_api_key="test-gemini-key",
+    )
+    assert settings.database_url == "postgresql+psycopg://u:p@host:5432/db"
+
+
+def test_password_containing_the_scheme_is_not_mangled() -> None:
+    # Only the leading scheme is rewritten — a `postgres://` sitting inside
+    # the credentials must survive untouched.
+    url = "postgresql+asyncpg://u:postgres%3A//p@host:5432/db"
+    settings = Settings(
+        **{**_BASE_KWARGS, "database_url": url},
+        gemini_api_key="test-gemini-key",
+    )
+    assert settings.database_url == url
