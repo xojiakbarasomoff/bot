@@ -26,7 +26,21 @@ USER app
 
 EXPOSE 8000
 
-# Shell form (not exec-array) so ${PORT:-8000} actually expands: Railway
-# injects PORT at runtime and expects the container to bind to it, while
-# local `docker run`/docker-compose usage (no PORT set) falls back to 8000.
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# One image, two roles. The web API and the arq worker run the same code
+# and differ only in entrypoint, but a host that builds every service in a
+# project from this one repo has nowhere per-service to put that
+# difference: a committed start command (railway.json) applies to the whole
+# repo and would silently make the worker a second web server. Environment
+# variables *are* per-service, so the role comes from APP_ROLE. Unset means
+# web, which keeps `docker run` and any host that knows nothing about
+# APP_ROLE doing the obvious thing.
+#
+# docker-compose.yml overrides `command:` for its worker and never reaches
+# this dispatch.
+#
+# Shell form (not exec-array) so ${PORT:-8000} actually expands: hosts
+# inject PORT at runtime and expect the container to bind to it, while
+# local `docker run` (no PORT set) falls back to 8000. `exec` replaces the
+# shell so the process gets SIGTERM directly on shutdown instead of the
+# shell swallowing it and the platform resorting to SIGKILL.
+CMD if [ "$APP_ROLE" = worker ]; then exec arq app.workers.tasks.WorkerSettings; else exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}; fi
