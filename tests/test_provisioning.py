@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.encryption import decrypt, encrypt
-from app.core.provisioning import _provision
+from app.core.provisioning import _provision, provision_channel_if_configured
 from app.models.channel import Channel
 from app.models.tenant import Tenant
 
@@ -134,9 +134,16 @@ async def test_existing_real_token_is_not_overwritten(db_session: AsyncSession) 
     assert decrypt(channel.credentials) == "IGAA-token-set-by-hand"
 
 
-def test_unconfigured_settings_leave_provisioning_disarmed() -> None:
-    # The default must be "do nothing": an unset variable is not an
-    # instruction to invent a tenant.
-    settings = _settings()
-    assert settings.provision_ig_account_id is None
-    assert settings.provision_tenant_name is None
+async def test_unconfigured_settings_provision_nothing(db_session: AsyncSession) -> None:
+    """The default must be "do nothing": an unset variable is not an
+    instruction to invent a tenant.
+
+    Asserts the behaviour rather than the field defaults, because Settings
+    falls back to the real environment for anything not passed in -- a
+    defaults assertion would fail on exactly the machines where these
+    variables are set, which includes every machine running this deployment.
+    """
+    await provision_channel_if_configured(
+        _settings(provision_ig_account_id=None, provision_tenant_name=None)
+    )
+    assert (await db_session.execute(select(Tenant))).scalars().all() == []

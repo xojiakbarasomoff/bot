@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
+    @field_validator("provision_ig_account_id", "provision_tenant_name", mode="after")
+    @classmethod
+    def _strip_provisioning_values(cls, value: str | None) -> str | None:
+        """A value pasted into a hosting dashboard with a trailing newline
+        would be stored verbatim as Channel.external_id, which
+        resolve_tenant_for_ig_account could then never match -- provisioning
+        logging success on one side while every webhook logs
+        webhook_unknown_ig_account on the other.
+        """
+        return value.strip() if value is not None else None
+
     @field_validator("database_url", mode="after")
     @classmethod
     def _normalize_database_driver(cls, value: str) -> str:

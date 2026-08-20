@@ -18,6 +18,7 @@ be removed -- they are an instruction to provision, not a description of the
 running system.
 """
 
+import asyncio
 import logging
 
 from sqlalchemy import select
@@ -38,6 +39,10 @@ CHANNEL_TYPE = "instagram"
 # app.services.instagram_client reads it as "not configured yet" and skips
 # sending, rather than calling Meta with a value that cannot work.
 _PLACEHOLDER = "pending"
+
+# Long enough for a healthy database on the same private network, short
+# enough that an unhealthy one does not keep the web process from serving.
+_STARTUP_TIMEOUT_SECONDS = 15.0
 
 
 def _credential_plaintext(channel: Channel) -> str:
@@ -78,14 +83,13 @@ async def _provision(
             )
         )
         await session.commit()
-        # WARNING, not INFO: nothing configures logging here, so INFO is
-        # dropped by the default handler -- and "this deployment just created
-        # its tenant" is a line you want to find later.
+        # WARNING, not INFO: "this deployment created its tenant" is a line
+        # worth finding later without having to widen a log filter.
         logger.warning(
             "provisioned_channel tenant_id=%s ig_account_id=%s has_token=%s",
             tenant.id,
             ig_account_id,
-            access_token is not None,
+            bool(access_token),
         )
         return
 
@@ -94,7 +98,7 @@ async def _provision(
     # token existed would otherwise stay permanently unable to reply, and
     # silently, since the client skips placeholder credentials rather than
     # raising.
-    if access_token is not None and is_placeholder_credential(_credential_plaintext(channel)):
+    if access_token and is_placeholder_credential(_credential_plaintext(channel)):
         channel.credentials = encrypt(access_token)
         await session.commit()
         logger.warning(
@@ -124,7 +128,7 @@ async def provision_channel_if_configured(settings: Settings) -> None:
     if ig_account_id is None or tenant_name is None:
         return
 
-    try:
+    async def _run() -> None:
         async with db_session() as session:
             await _provision(
                 session,
@@ -132,5 +136,18 @@ async def provision_channel_if_configured(settings: Settings) -> None:
                 tenant_name=tenant_name,
                 access_token=settings.access_token,
             )
+
+    try:
+        # Bounded, because this sits in the startup path: an unreachable
+        # database would otherwise hold the port closed for asyncpg's own
+        # connect timeout, failing the platform's health check and rolling
+        # the deploy back -- the opposite of what "never fatal" is for.
+        await asyncio.wait_for(_run(), timeout=_STARTUP_TIMEOUT_SECONDS)
+    except TimeoutError:
+        logger.error(
+            "provisioning_timed_out ig_account_id=%s seconds=%s",
+            ig_account_id,
+            _STARTUP_TIMEOUT_SECONDS,
+        )
     except Exception:
         logger.exception("provisioning_failed ig_account_id=%s", ig_account_id)

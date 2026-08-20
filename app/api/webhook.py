@@ -70,11 +70,10 @@ def _signature_failure_detail(
     dashboard with a trailing newline or wrapping quotes, which silently
     changes the HMAC while looking identical on screen.
 
-    Formatted into the log *message* rather than passed as `extra=`,
-    unlike the rest of this module: nothing installs a structured log
-    handler, so `extra` fields are dropped by the default uvicorn
-    formatter and would be invisible exactly where this is needed — in a
-    deployed environment's log stream.
+    Returned as one preformatted string rather than a dict because the
+    caller decides whether this failure is fatal and both branches log
+    the same detail (see receive_webhook). New call sites should prefer
+    `extra=`, which app.core.logging now renders the same way.
     """
     expected = hmac.new(app_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     fields: dict[str, object] = {
