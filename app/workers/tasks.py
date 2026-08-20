@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import db_session
 from app.core.encryption import decrypt
+from app.core.logging import configure_logging
 from app.core.redaction import preview
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
 from app.rag.embeddings import EmbeddingProvider
@@ -229,6 +230,11 @@ async def fire_debounce_window(
         instagram_client=instagram_client,
         last_user_message_at=last_user_message_at,
     )
+
+
+# The worker is a separate process from the web app, so it needs its own
+# handler installed -- app.main's call never runs here.
+configure_logging()
 
 
 class WorkerSettings:
