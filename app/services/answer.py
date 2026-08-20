@@ -13,9 +13,15 @@ _SYSTEM_PROMPT_TEMPLATE = """\
 You are a warm, friendly front-desk assistant for a dental clinic, chatting with \
 patients over Instagram Direct Messages.
 
-Reply in the same language the patient wrote in. Sound like a helpful human \
-receptionist texting a patient — friendly and natural, not robotic — but keep \
-replies short: a couple of sentences, not an essay.
+Reply in the same language the patient wrote in. Patients often write very \
+short messages, slang, or transliterated words ("Nmagap", "Alik", "Salom") \
+that are hard to place — when you are not confident which language a message \
+is in, reply in {default_language}. Never answer in a language the patient \
+has not used.
+
+Sound like a helpful human receptionist texting a patient — friendly and \
+natural, not robotic — but keep replies short: a couple of sentences, not an \
+essay.
 
 You must answer using ONLY the clinic FAQ information listed below. Never use \
 outside knowledge, never guess, and never make up an answer that isn't in the FAQ \
@@ -74,9 +80,15 @@ _NO_FAQ_SYSTEM_PROMPT = """\
 You are a warm, friendly front-desk assistant for a dental clinic, chatting with \
 patients over Instagram Direct Messages.
 
-Reply in the same language the patient wrote in. Sound like a helpful human \
-receptionist texting a patient — friendly and natural, not robotic — but keep \
-replies short: a couple of sentences, not an essay.
+Reply in the same language the patient wrote in. Patients often write very \
+short messages, slang, or transliterated words ("Nmagap", "Alik", "Salom") \
+that are hard to place — when you are not confident which language a message \
+is in, reply in {default_language}. Never answer in a language the patient \
+has not used.
+
+Sound like a helpful human receptionist texting a patient — friendly and \
+natural, not robotic — but keep replies short: a couple of sentences, not an \
+essay.
 
 The clinic has not given you its own FAQ information, so answer general \
 questions from your own knowledge, within these limits:
@@ -110,12 +122,16 @@ def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
 
 
 def _build_system_prompt(
-    matches: Sequence[KnowledgeBaseMatch], flagged_as_medical_advice: bool
+    matches: Sequence[KnowledgeBaseMatch],
+    flagged_as_medical_advice: bool,
+    default_language: str,
 ) -> str:
     if matches:
-        prompt = _SYSTEM_PROMPT_TEMPLATE.format(faq_context=_format_faq_context(matches))
+        prompt = _SYSTEM_PROMPT_TEMPLATE.format(
+            faq_context=_format_faq_context(matches), default_language=default_language
+        )
     else:
-        prompt = _NO_FAQ_SYSTEM_PROMPT
+        prompt = _NO_FAQ_SYSTEM_PROMPT.format(default_language=default_language)
     if flagged_as_medical_advice:
         prompt += _MEDICAL_ADVICE_REMINDER
     return prompt
@@ -161,7 +177,9 @@ async def generate_answer(
         return NO_MATCH_RESPONSE
 
     system_prompt = _build_system_prompt(
-        matches, flagged_as_medical_advice=guardrail.category is GuardrailCategory.MEDICAL_ADVICE
+        matches,
+        flagged_as_medical_advice=guardrail.category is GuardrailCategory.MEDICAL_ADVICE,
+        default_language=(settings or get_settings()).default_reply_language,
     )
     provider = llm_provider or get_llm_provider()
     return await provider.generate(system_prompt, [{"role": "user", "content": user_message}])

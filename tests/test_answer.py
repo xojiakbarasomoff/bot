@@ -187,6 +187,61 @@ async def test_disabled_by_default_so_an_unset_variable_cannot_relax_it(
     assert llm_provider.calls == []
 
 
+async def test_default_reply_language_reaches_the_prompt(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """Patients open with "Salom", "Alik", "Nmagap" -- too short and too
+    transliterated for the model to place, so it answers in English and the
+    clinic looks like it is replying in the wrong language. The configured
+    language is what it falls back to instead.
+    """
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        await _make_faq(db_session, "What are your hours?", "9 to 5, Mon-Sat.")
+        await generate_answer(
+            db_session,
+            "Nmagap",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(default_reply_language="Uzbek"),
+        )
+
+    system_prompt = llm_provider.calls[0][0]
+    assert "reply in Uzbek" in system_prompt
+    # The instruction to mirror the patient still comes first: the fallback
+    # applies only when the language is unclear, it does not override a
+    # message that plainly is in another language.
+    assert system_prompt.index("same language the patient wrote in") < system_prompt.index(
+        "reply in Uzbek"
+    )
+
+
+async def test_default_language_also_applies_without_a_faq_match(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    # The no-FAQ path is the one a not-yet-populated deployment actually
+    # runs, so the language fallback has to be in that prompt too.
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        await generate_answer(
+            db_session,
+            "Nmagap",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(answer_without_faq=True, default_reply_language="Uzbek"),
+        )
+
+    assert "reply in Uzbek" in llm_provider.calls[0][0]
+
+
 # --- medical-advice: still goes through the LLM, with redirect framing enforced ---
 
 

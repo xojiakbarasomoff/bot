@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # to every message -- app.services.answer._NO_FAQ_SYSTEM_PROMPT still
     # forbids clinic specifics and medical advice on that path.
     answer_without_faq: bool = Field(default=False, alias="ANSWER_WITHOUT_FAQ")
+    # The language to reply in when the patient's own is unclear. Patients
+    # open with "Salom", "Alik", "Nmagap" -- too short and too transliterated
+    # for a model to place, and it falls back to English, which reads as the
+    # wrong clinic answering. Named in English ("Uzbek", "Russian") because
+    # it goes into an English system prompt.
+    default_reply_language: str = Field(default="English", alias="DEFAULT_REPLY_LANGUAGE")
 
     # TODO(IGB-?): move onto Tenant/per-tenant settings once the admin panel
     # (TZ 4.2) exists, so each clinic can tune its own debounce window
