@@ -18,6 +18,9 @@ COPY app ./app
 # file, so it runs once (on the web service) instead of racing a second
 # copy of itself on the worker.
 COPY alembic.ini ./
+# docs/index.html is served at /privacy (app.main) - the privacy-policy URL
+# Meta requires before an app can be published.
+COPY docs ./docs
 COPY migrations ./migrations
 
 RUN pip install --no-cache-dir .
