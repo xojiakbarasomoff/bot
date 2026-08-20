@@ -51,6 +51,15 @@ class Settings(BaseSettings):
     # by someone explicitly setting the variable.
     webhook_signature_enforced: bool = Field(default=True, alias="WEBHOOK_SIGNATURE_ENFORCED")
 
+    # With no FAQ match, whether the LLM may answer from its own knowledge
+    # instead of returning app.services.answer.NO_MATCH_RESPONSE. Defaults to
+    # false: a clinic assistant that improvises will state opening hours and
+    # prices a patient then acts on. Enabled for a deployment whose knowledge
+    # base is not populated yet, where a general reply beats a fixed refusal
+    # to every message -- app.services.answer._NO_FAQ_SYSTEM_PROMPT still
+    # forbids clinic specifics and medical advice on that path.
+    answer_without_faq: bool = Field(default=False, alias="ANSWER_WITHOUT_FAQ")
+
     # TODO(IGB-?): move onto Tenant/per-tenant settings once the admin panel
     # (TZ 4.2) exists, so each clinic can tune its own debounce window
     # instead of every tenant sharing this one value — same pattern as

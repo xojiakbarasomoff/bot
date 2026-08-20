@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.rag.embeddings import EMBEDDING_DIMENSIONS, EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider
 from app.repositories.knowledge_base import KnowledgeBaseRepository
@@ -94,6 +95,92 @@ async def test_generate_answer_returns_fixed_response_when_no_faq_matches(
             "Do you offer teeth whitening?",
             embedding_provider=embedding_provider,
             llm_provider=llm_provider,
+        )
+
+    assert result == NO_MATCH_RESPONSE
+    assert llm_provider.calls == []
+
+
+def _settings(**overrides: object) -> Settings:
+    base = {
+        "database_url": "postgresql+asyncpg://test:test@localhost/test",
+        "redis_url": "redis://localhost:6379/0",
+        "webhook_verify_token": "test-verify-token",
+        "meta_app_secret": "test-app-secret",
+        "encryption_key": "Hq3_REB-V0twf7iBgCPCSUZQiG44egxyiZg9kOKRxUg=",
+        "gemini_api_key": "test-gemini-key",
+    }
+    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+async def test_no_faq_match_asks_the_llm_when_answering_without_faq_is_enabled(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """ANSWER_WITHOUT_FAQ is what a deployment turns on before its knowledge
+    base is populated, so that patients get a real reply instead of the same
+    refusal to every message.
+    """
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        result = await generate_answer(
+            db_session,
+            "Do you offer teeth whitening?",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(answer_without_faq=True),
+        )
+
+    assert result != NO_MATCH_RESPONSE
+    assert len(llm_provider.calls) == 1
+
+
+async def test_answering_without_faq_still_forbids_clinic_details_and_medical_advice(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """The relaxed path drops "answer only from the FAQ" and nothing else:
+    an assistant free to improvise opening hours or medication is the
+    failure this setting must not introduce.
+    """
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        await generate_answer(
+            db_session,
+            "Do you offer teeth whitening?",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(answer_without_faq=True),
+        )
+
+    system_prompt = llm_provider.calls[0][0]
+    assert "opening hours, prices" in system_prompt
+    assert "Never state or guess any of" in system_prompt
+    assert "You are not a medical professional" in system_prompt
+    assert "Never claim or imply that you are a doctor" in system_prompt
+
+
+async def test_disabled_by_default_so_an_unset_variable_cannot_relax_it(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        result = await generate_answer(
+            db_session,
+            "Do you offer teeth whitening?",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(),
         )
 
     assert result == NO_MATCH_RESPONSE

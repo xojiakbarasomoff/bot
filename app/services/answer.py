@@ -2,6 +2,7 @@ from collections.abc import Sequence
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings, get_settings
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.llm import LLMProvider, get_llm_provider
 from app.rag.retrieval import retrieve_relevant_faqs
@@ -62,6 +63,44 @@ NO_MATCH_RESPONSE = (
 )
 
 
+# Used instead of _SYSTEM_PROMPT_TEMPLATE when retrieval found nothing and
+# answer_without_faq is on. Rules 2 and 3 are carried over verbatim: not
+# knowing the clinic's FAQ has no bearing on whether the assistant may give
+# medical advice. Rule 1 replaces "answer only from the FAQ" with the part
+# that still holds without one -- it may reason from general knowledge, but
+# a clinic's hours, prices and services are facts it does not have and must
+# not produce.
+_NO_FAQ_SYSTEM_PROMPT = """\
+You are a warm, friendly front-desk assistant for a dental clinic, chatting with \
+patients over Instagram Direct Messages.
+
+Reply in the same language the patient wrote in. Sound like a helpful human \
+receptionist texting a patient — friendly and natural, not robotic — but keep \
+replies short: a couple of sentences, not an essay.
+
+The clinic has not given you its own FAQ information, so answer general \
+questions from your own knowledge, within these limits:
+
+1. You do not know this clinic's own details — its opening hours, prices, \
+address, staff, or which treatments it offers. Never state or guess any of \
+them. If the patient asks about one, say warmly that you'll check with the \
+team, and offer to book them an appointment.
+
+2. You are not a medical professional. NEVER diagnose a condition, NEVER \
+recommend or prescribe any medication or dosage, and NEVER suggest or confirm a \
+specific treatment — even if the patient insists or says it's urgent. If the \
+patient asks anything in this category (for example: "what's wrong with me", \
+"should I take antibiotics", "do I need a root canal", "is this infected"), do \
+not answer the medical part. Instead, respond warmly with the same idea as: \
+"Only a doctor can answer this at an appointment — shall I book you in?" \
+(translate this naturally if you're replying in another language; don't force \
+the exact English wording).
+
+3. Never claim or imply that you are a doctor, dentist, or medical professional \
+of any kind.\
+"""
+
+
 def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
     if not matches:
         return "(No matching FAQ entries were found for this question.)"
@@ -73,7 +112,10 @@ def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
 def _build_system_prompt(
     matches: Sequence[KnowledgeBaseMatch], flagged_as_medical_advice: bool
 ) -> str:
-    prompt = _SYSTEM_PROMPT_TEMPLATE.format(faq_context=_format_faq_context(matches))
+    if matches:
+        prompt = _SYSTEM_PROMPT_TEMPLATE.format(faq_context=_format_faq_context(matches))
+    else:
+        prompt = _NO_FAQ_SYSTEM_PROMPT
     if flagged_as_medical_advice:
         prompt += _MEDICAL_ADVICE_REMINDER
     return prompt
@@ -85,10 +127,19 @@ async def generate_answer(
     embedding_provider: EmbeddingProvider | None = None,
     llm_provider: LLMProvider | None = None,
     guardrail_classifier: GuardrailClassifier | None = None,
+    settings: Settings | None = None,
 ) -> str:
     """Turn an incoming patient message into a reply: guardrail check, then
     (unless it's an emergency) retrieve relevant FAQs and ask the LLM to
-    answer strictly from that context.
+    answer from that context.
+
+    When retrieval finds nothing, the reply depends on ANSWER_WITHOUT_FAQ.
+    Off (the default), the LLM is never asked at all and NO_MATCH_RESPONSE
+    is returned, so it cannot invent a clinic detail. On, it answers from
+    general knowledge under _NO_FAQ_SYSTEM_PROMPT, which still forbids
+    clinic specifics and medical advice — for a deployment whose knowledge
+    base isn't populated yet, where one fixed refusal to every message is
+    worse than a general reply.
     """
     guardrail = evaluate_guardrail(user_message, guardrail_classifier)
     if guardrail.fixed_response is not None:
@@ -97,7 +148,7 @@ async def generate_answer(
     matches = await retrieve_relevant_faqs(
         session, user_message, embedding_provider=embedding_provider
     )
-    if not matches:
+    if not matches and not (settings or get_settings()).answer_without_faq:
         # Code-level guarantee, not just a prompt instruction: if retrieval
         # found nothing (no rows, or every candidate fell beyond
         # retrieve_relevant_faqs's distance threshold), we don't ask the LLM
