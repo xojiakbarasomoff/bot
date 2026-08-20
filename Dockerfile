@@ -12,9 +12,11 @@ RUN groupadd --system app && useradd --system --gid app --create-home app
 COPY pyproject.toml ./
 COPY app ./app
 # alembic.ini and migrations/ are runtime assets, not just dev tooling: the
-# deploy runs `alembic upgrade head` as a pre-deploy step (see
-# railway.json), which executes inside this image and can't find either if
-# they're left out.
+# deploy runs `alembic upgrade head` as a pre-deploy step, which executes
+# inside this image and can't find either if they're left out. That step is
+# configured per-service on the host rather than in a repo-level config
+# file, so it runs once (on the web service) instead of racing a second
+# copy of itself on the worker.
 COPY alembic.ini ./
 COPY migrations ./migrations
 
