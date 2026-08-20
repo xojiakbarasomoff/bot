@@ -21,7 +21,15 @@ MESSAGING_WINDOW = timedelta(hours=24)
 # like "latest" can change Graph API behavior under us without any change on
 # our side.
 GRAPH_API_VERSION = "v21.0"
-GRAPH_API_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+# graph.instagram.com, not graph.facebook.com. The channel credentials are
+# Instagram Login tokens (they start with "IGAA"), which the Facebook host
+# refuses outright -- it answers "Cannot parse access token" rather than a
+# permission error, so a misrouted send fails in a way that reads like a
+# corrupt token instead of a wrong host. Switching to a Facebook Page token
+# (an "EAA" token, issued through Facebook Login) would mean moving this
+# back and re-subscribing the account; the two hosts are not
+# interchangeable per-request.
+GRAPH_API_BASE_URL = f"https://graph.instagram.com/{GRAPH_API_VERSION}"
 
 # channel.credentials is NOT NULL, so a not-yet-configured channel can't be
 # stored as a real NULL — these sentinel strings are what ops seed a channel
