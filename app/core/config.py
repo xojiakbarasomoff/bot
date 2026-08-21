@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     # it goes into an English system prompt.
     default_reply_language: str = Field(default="English", alias="DEFAULT_REPLY_LANGUAGE")
 
+    # The clinic's own reception numbers, quoted verbatim to a patient whose
+    # price question the knowledge base cannot answer (see
+    # app.services.answer -- the pricing rule). Free-form, because "+998 90
+    # 123 45 67 or +998 71 200 00 00" is what a clinic actually wants read
+    # back. Unset (the default) is a supported state, not a broken one: the
+    # assistant then only offers a callback and never invents a number to
+    # read out, which is the failure this being configuration rather than
+    # prompt text exists to prevent.
+    clinic_phone_numbers: str | None = Field(default=None, alias="CLINIC_PHONE_NUMBERS")
+
     # How long to wait for a patient to finish typing before answering. The
     # wait exists so a question split across bubbles ("Salom" / "narxi
     # qancha?") gets one answer instead of one per bubble -- but it is dead
@@ -102,14 +112,21 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
-    @field_validator("provision_ig_account_id", "provision_tenant_name", mode="after")
+    @field_validator(
+        "provision_ig_account_id", "provision_tenant_name", "clinic_phone_numbers", mode="after"
+    )
     @classmethod
-    def _strip_provisioning_values(cls, value: str | None) -> str | None:
-        """A value pasted into a hosting dashboard with a trailing newline
-        would be stored verbatim as Channel.external_id, which
-        resolve_tenant_for_ig_account could then never match -- provisioning
-        logging success on one side while every webhook logs
-        webhook_unknown_ig_account on the other.
+    def _strip_pasted_values(cls, value: str | None) -> str | None:
+        """These three are the ones an operator pastes into a hosting
+        dashboard, where a trailing newline rides along invisibly and is then
+        stored verbatim.
+
+        For the provisioning ids that is silent and total: the newline lands
+        in Channel.external_id, resolve_tenant_for_ig_account can never match
+        it again, and provisioning logs success on one side while every
+        webhook logs webhook_unknown_ig_account on the other. For
+        clinic_phone_numbers it is merely visible -- the assistant reads the
+        number back to a patient with a line break in the middle of it.
         """
         return value.strip() if value is not None else None
 

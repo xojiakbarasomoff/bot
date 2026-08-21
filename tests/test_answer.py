@@ -252,6 +252,7 @@ async def _capture_system_prompt(
     as_tenant: Callable[[UUID], AbstractContextManager[None]],
     *,
     with_faq: bool,
+    **settings_overrides: object,
 ) -> str:
     """Run generate_answer far enough to grab the system prompt it built.
 
@@ -271,7 +272,7 @@ async def _capture_system_prompt(
             "Assalom alaykum",
             embedding_provider=embedding_provider,
             llm_provider=llm_provider,
-            settings=_settings(answer_without_faq=not with_faq),
+            settings=_settings(answer_without_faq=not with_faq, **settings_overrides),
         )
 
     return llm_provider.calls[0][0]
@@ -365,6 +366,135 @@ async def test_no_match_response_asks_for_a_phone_number(
     assert result == NO_MATCH_RESPONSE
     assert llm_provider.calls == []
     assert "phone number" in NO_MATCH_RESPONSE
+
+
+# --- what the clinic does and does not offer, and what a price costs ---
+
+
+async def test_faq_prompt_answers_service_questions_instead_of_deflecting(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """A question like "do you do implants?" is a yes/no question. Answering
+    it with a booking offer reads as evasion, and the patient asks a
+    competitor instead.
+    """
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=True)
+
+    assert "say plainly that yes, it is available" in system_prompt
+    assert "Afsuski, bizda bunaqa xizmat hozircha yo'q" in system_prompt
+
+
+async def test_faq_prompt_will_not_call_a_service_unavailable_on_silence(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """Retrieval returns the nearest FAQ entries, not the clinic's full
+    service list, so a treatment missing from the context is unknown rather
+    than absent. Announcing "we don't do that" from silence turns away a
+    patient for a treatment the clinic may well perform.
+    """
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=True)
+
+    assert "does not mention the treatment either way, you do not know" in system_prompt
+    assert "so do not say it is unavailable" in system_prompt
+
+
+async def test_no_faq_prompt_claims_nothing_about_services_in_either_direction(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """With no knowledge base at all, every service question is the unknown
+    case -- so this path must never confirm a treatment either.
+    """
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=False)
+
+    assert "never tell a patient that it does, and never tell" in system_prompt
+    assert "Afsuski, bizda bunaqa xizmat hozircha yo'q" not in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_prompt_forbids_inventing_somewhere_else_to_go(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """The no-FAQ path is the dangerous one here: it is explicitly allowed to
+    use general knowledge, which is exactly what would produce a confident,
+    fictional referral to a clinic across town.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "must NOT name another clinic" in system_prompt
+    assert "Afsuski, bizda bunday ma'lumot yo'q" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_configured_clinic_numbers_are_quoted_in_the_pricing_fallback(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    system_prompt = await _capture_system_prompt(
+        db_session,
+        seed,
+        as_tenant,
+        with_faq=with_faq,
+        clinic_phone_numbers="+998 90 123 45 67",
+    )
+
+    assert "+998 90 123 45 67" in system_prompt
+    assert "ushbu telefon raqamlariga qo'ng'iroq qiling" in system_prompt
+    # The callback offer is not an either/or with the numbers: a patient who
+    # is writing rather than calling is the one this whole rule exists for.
+    assert "qachon gaplashish siz uchun qulay bo'lgan" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_pricing_fallback_invents_no_number_when_none_is_configured(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """CLINIC_PHONE_NUMBERS is unset by default, and a model asked to tell
+    patients to "call these numbers" with no numbers given will produce a
+    plausible +998 one. The prompt must drop that half of the offer instead.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "ushbu telefon raqamlariga qo'ng'iroq qiling" not in system_prompt
+    assert "You have NOT been given a phone number" in system_prompt
+    assert "never invent one" in system_prompt
+    # The callback half survives -- it is the part that works without numbers.
+    assert "qachon gaplashish siz uchun qulay bo'lgan" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_prompt_forbids_dodging_a_price_with_an_estimate(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """A quoted range the clinic never agreed to is worse than no answer: the
+    patient arrives expecting it.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "do not give a range" in system_prompt
+    assert "do not say a doctor will decide" in system_prompt
 
 
 # --- medical-advice: still goes through the LLM, with redirect framing enforced ---

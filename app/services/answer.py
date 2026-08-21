@@ -44,12 +44,14 @@ first. Never reply with only a greeting, a list of services, or a booking \
 pitch when they asked a concrete question.\
 """
 
-# Rules 2-4, identical on both paths: the two "you are not a clinician" rules,
-# and getting a phone number to the call centre. One string, so the safety
-# rules cannot drift apart between the FAQ and no-FAQ prompts.
+# Rules 3-7, identical on both paths: the two "you are not a clinician"
+# rules, never sending the patient somewhere invented, pricing, and getting a
+# number to the call centre. One string, so these cannot drift apart between
+# the FAQ and no-FAQ prompts. {price_contact} is filled per deployment -- see
+# _price_contact_clause.
 _SHARED_RULES = """
 
-2. You are not a medical professional. NEVER diagnose a condition, NEVER \
+3. You are not a medical professional. NEVER diagnose a condition, NEVER \
 recommend or prescribe any medication or dosage, and NEVER suggest or confirm a \
 specific treatment — even if the patient insists or says it's urgent. If the \
 patient asks anything in this category (for example: "what's wrong with me", \
@@ -59,10 +61,29 @@ not answer the medical part. Instead, respond warmly with the same idea as: \
 (translate this naturally if you're replying in another language; don't force \
 the exact English wording).
 
-3. Never claim or imply that you are a doctor, dentist, or medical professional \
+4. Never claim or imply that you are a doctor, dentist, or medical professional \
 of any kind.
 
-4. A colleague at the clinic's call centre follows these conversations up by \
+5. When you do not have something, say you do not have it, and stop there. \
+Never fill the gap. In particular, if the patient asks where else they could \
+get a treatment this clinic does not do, you must NOT name another clinic, \
+doctor, hospital, website or city, and must NOT describe what such a place \
+would be like — even in general terms, even if you are confident, and even \
+though you may otherwise know such things. Say exactly the idea of "Afsuski, \
+bizda bunday ma'lumot yo'q" ("Unfortunately we don't have that information") \
+and nothing further on it. A guess here sends a patient in pain to an address \
+that may not exist.
+
+6. Prices. If the information above gives the price the patient asked about, \
+tell them it plainly — that is what they came for. If it does not, do not \
+estimate it, do not give a range, do not say it depends, and do not say a \
+doctor will decide. Say the same idea as: \
+"Narxlarni bilish uchun {price_contact}" — that is, {price_contact_gloss}. \
+Asking when to call matters as much as the number itself: these patients are \
+writing precisely because they cannot talk right now, and a callback at a bad \
+moment is a lost patient.
+
+7. A colleague at the clinic's call centre follows these conversations up by \
 phone, so try to come away with the patient's number. Once you have answered \
 as far as you can — they want to book, they asked something you cannot answer \
 here, or you had to send them to a doctor — close your reply by asking for \
@@ -88,16 +109,29 @@ Rules you must always follow, without exception:
 
 1. Answer only from the FAQ context above. If it doesn't contain the answer to \
 the patient's question, say so honestly and warmly — do not invent an answer — \
-and offer to book them an appointment instead.\
+and offer to book them an appointment instead.
+
+2. When the patient asks whether the clinic does a particular treatment, answer \
+the question directly instead of deflecting to a booking. If the FAQ context \
+above shows the clinic offers it, say plainly that yes, it is available, and go \
+on to whatever else they asked. If the FAQ context shows the clinic does not \
+offer it, say the same idea as "Afsuski, bizda bunaqa xizmat hozircha yo'q" \
+("Unfortunately we don't offer that at the moment") — briefly and without \
+apologising at length. If the FAQ context above simply does not mention the \
+treatment either way, you do not know: that is not the same as the clinic not \
+offering it, so do not say it is unavailable. Tell them you'll check with the \
+team and follow rule 7.\
 """
 
 # Used instead of _FAQ_RULE_BLOCK when retrieval found nothing and
-# answer_without_faq is on. Rules 2-4 are carried over unchanged: not knowing
+# answer_without_faq is on. Rules 3-7 are carried over unchanged: not knowing
 # the clinic's FAQ has no bearing on whether the assistant may give medical
-# advice, or on the call centre wanting a number. Rule 1 replaces "answer only
-# from the FAQ" with the part that still holds without one -- it may reason
-# from general knowledge, but a clinic's hours, prices and services are facts
-# it does not have and must not produce.
+# advice, invent a referral, or want a phone number. Rule 1 replaces "answer
+# only from the FAQ" with the part that still holds without one -- it may
+# reason from general knowledge, but a clinic's hours, prices and services are
+# facts it does not have and must not produce. Rule 2 is the mirror of the FAQ
+# path's: with no FAQ at all, every treatment question is the "does not mention
+# it either way" case, so it can never announce that something is unavailable.
 _NO_FAQ_RULE_BLOCK = """
 
 The clinic has not given you its own FAQ information, so answer general \
@@ -106,7 +140,13 @@ questions from your own knowledge, within these limits:
 1. You do not know this clinic's own details — its opening hours, prices, \
 address, staff, or which treatments it offers. Never state or guess any of \
 them. If the patient asks about one, say warmly that you'll check with the \
-team, and offer to book them an appointment.\
+team, and offer to book them an appointment.
+
+2. That includes whether the clinic does a particular treatment. You have not \
+been told what it offers, so never tell a patient that it does, and never tell \
+a patient that it does not — being turned away by a clinic that in fact does \
+the treatment is the worse of the two mistakes, and you have no way to tell \
+which one you are making. Say you'll check with the team, and follow rule 7.\
 """
 
 _SYSTEM_PROMPT_TEMPLATE = _PREAMBLE + _FAQ_RULE_BLOCK + _SHARED_RULES
@@ -116,7 +156,7 @@ _MEDICAL_ADVICE_REMINDER = """
 
 IMPORTANT: This message was flagged as a possible request for medical advice, \
 diagnosis, medication, or treatment guidance. Do not answer the medical \
-substance of the question under any circumstances — follow rule 2 above and \
+substance of the question under any circumstances — follow rule 3 above and \
 redirect to booking an appointment.\
 """
 
@@ -124,7 +164,7 @@ redirect to booking an appointment.\
 # cannot follow the prompt rules above -- it can't mirror the patient's
 # language or alphabet, and it can't tell whether a number was already given.
 # It still asks for the number, because "we cannot answer this here" is exactly
-# the case rule 4 exists for: the call centre is the only route by which this
+# the case rule 7 exists for: the call centre is the only route by which this
 # patient gets a real answer.
 #
 # TODO(IGB-?): like EMERGENCY_RESPONSE in guardrail.py, this is a single
@@ -145,17 +185,58 @@ def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
     )
 
 
+def _price_contact_clause(clinic_phone_numbers: str | None) -> tuple[str, str]:
+    """The two halves of rule 6's fallback: the Uzbek sentence the clinic
+    dictated, and an English gloss of it so the model can render the same
+    offer in Russian or English rather than pasting Uzbek at a Russian
+    speaker.
+
+    Both halves change together with CLINIC_PHONE_NUMBERS, because "call
+    these numbers" is not a sentence that can be said at all without numbers
+    to say. With none configured the offer narrows to the callback, and the
+    gloss says outright that no clinic number is known -- an instruction not
+    to invent one is worth more here than anywhere else in the prompt, since
+    a plausible-looking +998 number is exactly what a model will happily
+    produce.
+    """
+    callback = (
+        "telefon raqamingizni va qachon gaplashish siz uchun qulay bo'lgan "
+        "vaqtni qoldiring, o'sha vaqtda o'zimiz qo'ng'iroq qilamiz"
+    )
+    if clinic_phone_numbers:
+        return (
+            f"ushbu telefon raqamlariga qo'ng'iroq qiling: {clinic_phone_numbers} — "
+            f"yoki {callback}",
+            "invite them to call the clinic on "
+            f"{clinic_phone_numbers}, or to leave their own number together with a "
+            "time that suits them, and promise the clinic will call then",
+        )
+    return (
+        callback,
+        "ask them to leave their number together with a time that suits them, and "
+        "promise the clinic will call then. You have NOT been given a phone number "
+        "for this clinic, so do not read one out and never invent one",
+    )
+
+
 def _build_system_prompt(
     matches: Sequence[KnowledgeBaseMatch],
     flagged_as_medical_advice: bool,
     default_language: str,
+    clinic_phone_numbers: str | None,
 ) -> str:
+    price_contact, price_contact_gloss = _price_contact_clause(clinic_phone_numbers)
+    shared = {
+        "default_language": default_language,
+        "price_contact": price_contact,
+        "price_contact_gloss": price_contact_gloss,
+    }
     if matches:
         prompt = _SYSTEM_PROMPT_TEMPLATE.format(
-            faq_context=_format_faq_context(matches), default_language=default_language
+            faq_context=_format_faq_context(matches), **shared
         )
     else:
-        prompt = _NO_FAQ_SYSTEM_PROMPT.format(default_language=default_language)
+        prompt = _NO_FAQ_SYSTEM_PROMPT.format(**shared)
     if flagged_as_medical_advice:
         prompt += _MEDICAL_ADVICE_REMINDER
     return prompt
@@ -181,6 +262,8 @@ async def generate_answer(
     base isn't populated yet, where one fixed refusal to every message is
     worse than a general reply.
     """
+    resolved_settings = settings or get_settings()
+
     guardrail = evaluate_guardrail(user_message, guardrail_classifier)
     if guardrail.fixed_response is not None:
         return guardrail.fixed_response
@@ -188,7 +271,7 @@ async def generate_answer(
     matches = await retrieve_relevant_faqs(
         session, user_message, embedding_provider=embedding_provider
     )
-    if not matches and not (settings or get_settings()).answer_without_faq:
+    if not matches and not resolved_settings.answer_without_faq:
         # Code-level guarantee, not just a prompt instruction: if retrieval
         # found nothing (no rows, or every candidate fell beyond
         # retrieve_relevant_faqs's distance threshold), we don't ask the LLM
@@ -203,7 +286,8 @@ async def generate_answer(
     system_prompt = _build_system_prompt(
         matches,
         flagged_as_medical_advice=guardrail.category is GuardrailCategory.MEDICAL_ADVICE,
-        default_language=(settings or get_settings()).default_reply_language,
+        default_language=resolved_settings.default_reply_language,
+        clinic_phone_numbers=resolved_settings.clinic_phone_numbers,
     )
     provider = llm_provider or get_llm_provider()
     return await provider.generate(system_prompt, [{"role": "user", "content": user_message}])

@@ -111,3 +111,24 @@ def test_password_containing_the_scheme_is_not_mangled() -> None:
         gemini_api_key="test-gemini-key",
     )
     assert settings.database_url == url
+
+
+def test_clinic_phone_numbers_default_to_none() -> None:
+    """Unset is the supported resting state: app.services.answer drops the
+    "call these numbers" half of the pricing fallback rather than letting the
+    model produce a number of its own.
+    """
+    settings = Settings(**_BASE_KWARGS, gemini_api_key="test-gemini-key", clinic_phone_numbers=None)
+    assert settings.clinic_phone_numbers is None
+
+
+def test_pasted_clinic_phone_numbers_are_stripped() -> None:
+    """Pasting into a hosting dashboard picks up a trailing newline, and this
+    value is read back to patients verbatim.
+    """
+    settings = Settings(
+        **_BASE_KWARGS,
+        gemini_api_key="test-gemini-key",
+        clinic_phone_numbers="  +998 90 123 45 67\n",
+    )
+    assert settings.clinic_phone_numbers == "+998 90 123 45 67"
