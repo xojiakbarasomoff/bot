@@ -9,6 +9,7 @@ from app.api import auth_router, dashboard_router, webhook_router
 from app.api.auth import NotAuthenticatedError
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.faq_seeding import seed_faqs_if_configured
 from app.core.provisioning import provision_channel_if_configured
 
 configure_logging()
@@ -18,7 +19,11 @@ configure_logging()
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Web only: the worker boots from the same image but never imports this
     # module, so the two processes cannot race to insert the same channel.
-    await provision_channel_if_configured(get_settings())
+    settings = get_settings()
+    await provision_channel_if_configured(settings)
+    # After provisioning, not before: seeding resolves its tenant through the
+    # channel row that provisioning is the thing responsible for creating.
+    await seed_faqs_if_configured(settings)
     yield
 
 

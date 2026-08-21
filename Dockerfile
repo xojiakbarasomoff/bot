@@ -26,6 +26,7 @@ COPY docs ./docs
 # network, which nothing outside the cluster can reach -- so they have to
 # execute from inside this image rather than from an operator's machine.
 COPY scripts ./scripts
+COPY data ./data
 COPY migrations ./migrations
 
 RUN pip install --no-cache-dir .

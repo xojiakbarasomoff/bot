@@ -116,6 +116,13 @@ class Settings(BaseSettings):
     provision_tenant_name: str | None = Field(default=None, alias="PROVISION_TENANT_NAME")
     provision_ig_account_id: str | None = Field(default=None, alias="PROVISION_IG_ACCOUNT_ID")
 
+    # Path to a FAQ JSON file to load into knowledge_base on web startup (see
+    # app.core.faq_seeding). Like the provisioning values above, it is an
+    # instruction to seed rather than a description of the running system --
+    # set it for the deploy that loads the file, then unset it. Unset (the
+    # default) skips seeding entirely.
+    seed_faqs_from: str | None = Field(default=None, alias="SEED_FAQS_FROM")
+
     model_provider: Literal["openai", "gemini"] = Field(default="gemini", alias="MODEL_PROVIDER")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
@@ -125,11 +132,12 @@ class Settings(BaseSettings):
         "provision_tenant_name",
         "clinic_phone_numbers",
         "clinic_address",
+        "seed_faqs_from",
         mode="after",
     )
     @classmethod
     def _strip_pasted_values(cls, value: str | None) -> str | None:
-        """These four are the ones an operator pastes into a hosting
+        """These five are the ones an operator pastes into a hosting
         dashboard, where a trailing newline rides along invisibly and is then
         stored verbatim.
 
