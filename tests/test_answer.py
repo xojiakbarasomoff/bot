@@ -2,6 +2,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from uuid import UUID
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -240,6 +241,130 @@ async def test_default_language_also_applies_without_a_faq_match(
         )
 
     assert "reply in Uzbek" in llm_provider.calls[0][0]
+
+
+# --- how the reply must sound: alphabet, greeting, and the call-centre ask ---
+
+
+async def _capture_system_prompt(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    *,
+    with_faq: bool,
+) -> str:
+    """Run generate_answer far enough to grab the system prompt it built.
+
+    Every rule below is checked on both paths on purpose: a clinic whose
+    knowledge base is not populated yet runs the no-FAQ prompt for every
+    single message, so a rule that only made it into the FAQ prompt would be
+    missing exactly where nobody would think to look for it.
+    """
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        if with_faq:
+            await _make_faq(db_session, "What are your hours?", "9 to 5, Mon-Sat.")
+        await generate_answer(
+            db_session,
+            "Assalom alaykum",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(answer_without_faq=not with_faq),
+        )
+
+    return llm_provider.calls[0][0]
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_prompt_requires_replying_in_the_alphabet_the_patient_used(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """Uzbek is written in both Latin and Cyrillic, and "same language" alone
+    does not settle which one to answer in -- a Cyrillic patient answered in
+    Latin has been replied to in their language and still cannot comfortably
+    read it.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "same alphabet they" in system_prompt
+    assert "answer a Cyrillic message in Cyrillic and a Latin message in Latin" in system_prompt
+    assert "Never transliterate a patient into the" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_prompt_carries_the_expected_greeting_for_each_language(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """The greeting "Assalom alaykum" has one correct answer, and a model left
+    to its own devices returns "Salom" or the English "Hello" instead -- which
+    reads, to the patient, as a clinic that did not greet them back.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "Va alaykum assalom" in system_prompt
+    assert "Ва алайкум ассалом" in system_prompt
+    assert "Здравствуйте" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_prompt_asks_for_a_phone_number_for_the_call_centre(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """The number is the whole point of the conversation for the clinic: a
+    call-centre colleague picks it up from here. Nothing in this pipeline
+    persists it yet, so the prompt is currently the only thing that gets it
+    asked for at all.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "asking for" in system_prompt
+    assert "phone number so a colleague can call them back" in system_prompt
+    # Asking must not displace the answer, or the bot reads as a lead-capture
+    # form that ignores what the patient came to ask.
+    assert "never let it crowd out the answer" in system_prompt
+
+
+async def test_no_match_response_asks_for_a_phone_number(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """This path never reaches the LLM, so rule 4 in the prompt cannot apply
+    to it -- and it is the case that needs a callback most, since the clinic
+    has just failed to answer the patient at all.
+    """
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        result = await generate_answer(
+            db_session,
+            "Do you offer teeth whitening?",
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            settings=_settings(),
+        )
+
+    assert result == NO_MATCH_RESPONSE
+    assert llm_provider.calls == []
+    assert "phone number" in NO_MATCH_RESPONSE
 
 
 # --- medical-advice: still goes through the LLM, with redirect framing enforced ---
