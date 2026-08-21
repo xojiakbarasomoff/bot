@@ -66,11 +66,19 @@ class Settings(BaseSettings):
     # it goes into an English system prompt.
     default_reply_language: str = Field(default="English", alias="DEFAULT_REPLY_LANGUAGE")
 
+    # How long to wait for a patient to finish typing before answering. The
+    # wait exists so a question split across bubbles ("Salom" / "narxi
+    # qancha?") gets one answer instead of one per bubble -- but it is dead
+    # time the patient spends staring at a silent chat, so it is deliberately
+    # short: long enough to catch the next bubble of a burst, not long enough
+    # to read as the bot ignoring them. 0 disables batching entirely and
+    # answers every bubble on its own.
+    #
     # TODO(IGB-?): move onto Tenant/per-tenant settings once the admin panel
     # (TZ 4.2) exists, so each clinic can tune its own debounce window
     # instead of every tenant sharing this one value — same pattern as
     # guardrail.EMERGENCY_RESPONSE / answer.NO_MATCH_RESPONSE.
-    debounce_window_seconds: int = Field(default=25, alias="DEBOUNCE_WINDOW_SECONDS")
+    debounce_window_seconds: int = Field(default=5, ge=0, alias="DEBOUNCE_WINDOW_SECONDS")
 
     # Single switch governing both the LLM and embedding backend (see
     # app.rag.llm._select_llm_provider / app.rag.embeddings._select_embedding_provider).
