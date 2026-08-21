@@ -497,6 +497,79 @@ async def test_prompt_forbids_dodging_a_price_with_an_estimate(
     assert "do not say a doctor will decide" in system_prompt
 
 
+# --- clinic details that come from configuration, not the knowledge base ---
+
+CLINIC_ADDRESS = "Toshkent, Yunusobod, Moyqo'rg'on 11A"
+CLINIC_PHONES = "+998336677788"
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_configured_address_is_given_to_the_model_as_fact(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """Both prompts otherwise forbid stating an address, which is right when
+    retrieval is the only source. An operator-typed one is a different kind of
+    fact, and a clinic with an empty knowledge base still has to be able to
+    answer "qayerdasiz?".
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session,
+        seed,
+        as_tenant,
+        with_faq=with_faq,
+        clinic_address=CLINIC_ADDRESS,
+        clinic_phone_numbers=CLINIC_PHONES,
+    )
+
+    assert f"Address: {CLINIC_ADDRESS}" in system_prompt
+    assert f"Phone: {CLINIC_PHONES}" in system_prompt
+    assert "never altered or added to" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_configured_details_do_not_unlock_the_rest_of_the_clinic(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """Being handed an address is not evidence of knowing the opening hours.
+    The exemption has to stay scoped to exactly what was configured, or it
+    becomes a licence to improvise every other clinic detail.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session,
+        seed,
+        as_tenant,
+        with_faq=with_faq,
+        clinic_address=CLINIC_ADDRESS,
+    )
+
+    assert "the only details of this clinic you have been given" in system_prompt
+    assert "Do not treat anything else about it as known" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_no_facts_section_appears_when_nothing_is_configured(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """An empty deployment must not be told it has details it does not have --
+    an empty "Address:" line is an invitation to fill it in.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq
+    )
+
+    assert "These clinic details are given to you as fact" not in system_prompt
+    assert "Address:" not in system_prompt
+
+
 # --- medical-advice: still goes through the LLM, with redirect framing enforced ---
 
 

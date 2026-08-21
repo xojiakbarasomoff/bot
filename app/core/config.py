@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     # it goes into an English system prompt.
     default_reply_language: str = Field(default="English", alias="DEFAULT_REPLY_LANGUAGE")
 
+    # The clinic's street address, stated verbatim to a patient who asks where
+    # it is. Configuration rather than a knowledge-base row because the
+    # assistant is otherwise forbidden from giving out an address at all (see
+    # app.services.answer, rule 1 on both paths), and a clinic whose knowledge
+    # base is not populated yet would have no way to answer "qayerdasiz?".
+    # Free-form, including any landmark worth reading back.
+    clinic_address: str | None = Field(default=None, alias="CLINIC_ADDRESS")
+
     # The clinic's own reception numbers, quoted verbatim to a patient whose
     # price question the knowledge base cannot answer (see
     # app.services.answer -- the pricing rule). Free-form, because "+998 90
@@ -113,11 +121,15 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
     @field_validator(
-        "provision_ig_account_id", "provision_tenant_name", "clinic_phone_numbers", mode="after"
+        "provision_ig_account_id",
+        "provision_tenant_name",
+        "clinic_phone_numbers",
+        "clinic_address",
+        mode="after",
     )
     @classmethod
     def _strip_pasted_values(cls, value: str | None) -> str | None:
-        """These three are the ones an operator pastes into a hosting
+        """These four are the ones an operator pastes into a hosting
         dashboard, where a trailing newline rides along invisibly and is then
         stored verbatim.
 
@@ -125,8 +137,9 @@ class Settings(BaseSettings):
         in Channel.external_id, resolve_tenant_for_ig_account can never match
         it again, and provisioning logs success on one side while every
         webhook logs webhook_unknown_ig_account on the other. For
-        clinic_phone_numbers it is merely visible -- the assistant reads the
-        number back to a patient with a line break in the middle of it.
+        clinic_phone_numbers and clinic_address it is merely visible -- the
+        assistant reads the value back to a patient with a line break in the
+        middle of it.
         """
         return value.strip() if value is not None else None
 

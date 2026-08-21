@@ -41,7 +41,7 @@ essay.
 
 Listen to what the patient actually asked and answer that specific thing \
 first. Never reply with only a greeting, a list of services, or a booking \
-pitch when they asked a concrete question.\
+pitch when they asked a concrete question.{clinic_facts}\
 """
 
 # Rules 3-7, identical on both paths: the two "you are not a clinician"
@@ -107,9 +107,10 @@ Clinic FAQ context:
 
 Rules you must always follow, without exception:
 
-1. Answer only from the FAQ context above. If it doesn't contain the answer to \
-the patient's question, say so honestly and warmly — do not invent an answer — \
-and offer to book them an appointment instead.
+1. Answer only from the FAQ context above and the clinic details given \
+earlier, if any were. If neither contains the answer to the patient's \
+question, say so honestly and warmly — do not invent an answer — and offer to \
+book them an appointment instead.
 
 2. When the patient asks whether the clinic does a particular treatment, answer \
 the question directly instead of deflecting to a booking. If the FAQ context \
@@ -137,10 +138,11 @@ _NO_FAQ_RULE_BLOCK = """
 The clinic has not given you its own FAQ information, so answer general \
 questions from your own knowledge, within these limits:
 
-1. You do not know this clinic's own details — its opening hours, prices, \
-address, staff, or which treatments it offers. Never state or guess any of \
-them. If the patient asks about one, say warmly that you'll check with the \
-team, and offer to book them an appointment.
+1. Beyond any clinic details listed above, you do not know this clinic's own \
+details — its opening hours, prices, address, staff, or which treatments it \
+offers. Never state or guess any of them. If the patient asks about one that \
+was not given to you above, say warmly that you'll check with the team, and \
+offer to book them an appointment.
 
 2. That includes whether the clinic does a particular treatment. You have not \
 been told what it offers, so never tell a patient that it does, and never tell \
@@ -185,6 +187,38 @@ def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
     )
 
 
+def _clinic_facts_block(clinic_address: str | None, clinic_phone_numbers: str | None) -> str:
+    """The handful of clinic facts that come from configuration rather than
+    from the knowledge base, rendered as a prompt section -- or "" when none
+    are configured.
+
+    Both prompts otherwise forbid stating an address or a phone number at all,
+    which is the right default when the only source is retrieval: a made-up
+    address sends a patient across Tashkent to a building that isn't there.
+    These are exempt because an operator typed them, not because the model
+    knows them, so they are presented as given facts and rule 1 on each path
+    is written to permit exactly what appears here and nothing more.
+    """
+    lines: list[str] = []
+    if clinic_address:
+        lines.append(f"Address: {clinic_address}")
+    if clinic_phone_numbers:
+        lines.append(f"Phone: {clinic_phone_numbers}")
+    if not lines:
+        return ""
+
+    detail_lines = "\n".join(lines)
+    return (
+        "\n\nThese clinic details are given to you as fact. State them to a "
+        "patient who asks, written out in their own language and alphabet, and "
+        "never altered or added to:\n"
+        f"{detail_lines}\n"
+        "These are the only details of this clinic you have been given "
+        "directly. Do not treat anything else about it as known on the "
+        "strength of them."
+    )
+
+
 def _price_contact_clause(clinic_phone_numbers: str | None) -> tuple[str, str]:
     """The two halves of rule 6's fallback: the Uzbek sentence the clinic
     dictated, and an English gloss of it so the model can render the same
@@ -224,12 +258,14 @@ def _build_system_prompt(
     flagged_as_medical_advice: bool,
     default_language: str,
     clinic_phone_numbers: str | None,
+    clinic_address: str | None,
 ) -> str:
     price_contact, price_contact_gloss = _price_contact_clause(clinic_phone_numbers)
     shared = {
         "default_language": default_language,
         "price_contact": price_contact,
         "price_contact_gloss": price_contact_gloss,
+        "clinic_facts": _clinic_facts_block(clinic_address, clinic_phone_numbers),
     }
     if matches:
         prompt = _SYSTEM_PROMPT_TEMPLATE.format(
@@ -288,6 +324,7 @@ async def generate_answer(
         flagged_as_medical_advice=guardrail.category is GuardrailCategory.MEDICAL_ADVICE,
         default_language=resolved_settings.default_reply_language,
         clinic_phone_numbers=resolved_settings.clinic_phone_numbers,
+        clinic_address=resolved_settings.clinic_address,
     )
     provider = llm_provider or get_llm_provider()
     return await provider.generate(system_prompt, [{"role": "user", "content": user_message}])
