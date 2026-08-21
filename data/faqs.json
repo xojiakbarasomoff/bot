@@ -1,0 +1,492 @@
+[
+  {
+    "question": "Klinikangiz haqida ma'lumot bering",
+    "answer": "Bizning klinikamiz zamonaviy stomatologiya klinikasi bo'lib, kattalar va bolalar uchun stomatologik xizmatlarni taqdim etadi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Bu qanday klinika?",
+    "answer": "Bizning klinikamiz zamonaviy stomatologiya klinikasi bo'lib, kattalar va bolalar uchun stomatologik xizmatlarni taqdim etadi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Siz nima bilan shug'ullanasiz?",
+    "answer": "Bizning klinikamiz zamonaviy stomatologiya klinikasi bo'lib, kattalar va bolalar uchun stomatologik xizmatlarni taqdim etadi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Manzilingiz qayerda?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Klinika qayerda joylashgan?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Qayerdasiz?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Qanday borsam bo'ladi?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Манзилингиз қаерда?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Где вы находитесь?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Ваш адрес?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Как до вас доехать?",
+    "answer": "Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Ish vaqtingiz qanday?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Soat nechigacha ishlaysiz?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Nechada ochilasiz?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Yakshanba kuni ishlaysizmi?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Dam olish kunlari ishlaysizmi?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Иш вақтингиз қандай?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Во сколько вы работаете?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "График работы какой?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Вы работаете в воскресенье?",
+    "answer": "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Telefon raqamingiz qanday?",
+    "answer": "Klinikaning telefon raqami: +998 33 667 77 88",
+    "category": "umumiy"
+  },
+  {
+    "question": "Телефон рақамингиз қандай?",
+    "answer": "Klinikaning telefon raqami: +998 33 667 77 88",
+    "category": "umumiy"
+  },
+  {
+    "question": "Ваш номер телефона?",
+    "answer": "Klinikaning telefon raqami: +998 33 667 77 88",
+    "category": "umumiy"
+  },
+  {
+    "question": "Qanday bog'lansam bo'ladi?",
+    "answer": "Klinikaning telefon raqami: +998 33 667 77 88. Klinika har kuni 09:00 dan 20:00 gacha ishlaydi. Manzil: Toshkent shahri, Yunusobod tumani, Moyqo'rg'on ko'chasi 11A uy. Orientir: AQSH elchixonasi.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Nechta filialingiz bor?",
+    "answer": "Klinikaning Toshkent shahrida 2 ta filiali mavjud.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Filiallaringiz bormi?",
+    "answer": "Klinikaning Toshkent shahrida 2 ta filiali mavjud.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Сколько у вас филиалов?",
+    "answer": "Klinikaning Toshkent shahrida 2 ta filiali mavjud.",
+    "category": "umumiy"
+  },
+  {
+    "question": "Qanday xizmatlar ko'rsatasiz?",
+    "answer": "Klinikada tish davolash, tish tozalash, tishlarni oqartirish, plomba qo'yish, tish olish, implantatsiya, protezlash, ortodontiya va bolalar stomatologiyasi xizmatlari mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Klinikada qaysi xizmatlar bor?",
+    "answer": "Klinikada tish davolash, tish tozalash, tishlarni oqartirish, plomba qo'yish, tish olish, implantatsiya, protezlash, ortodontiya va bolalar stomatologiyasi xizmatlari mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Қандай хизматлар кўрсатасиз?",
+    "answer": "Klinikada tish davolash, tish tozalash, tishlarni oqartirish, plomba qo'yish, tish olish, implantatsiya, protezlash, ortodontiya va bolalar stomatologiyasi xizmatlari mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Какие услуги вы предоставляете?",
+    "answer": "Klinikada tish davolash, tish tozalash, tishlarni oqartirish, plomba qo'yish, tish olish, implantatsiya, protezlash, ortodontiya va bolalar stomatologiyasi xizmatlari mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Qaysi bo'limlar mavjud?",
+    "answer": "Klinikada terapevtik stomatologiya, jarrohlik stomatologiyasi, ortodontiya, implantologiya va bolalar stomatologiyasi bo'limlari mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Qaysi mutaxassislar bor?",
+    "answer": "Klinikada stomatolog-terapevt, stomatolog-jarroh, ortodont, implantolog va bolalar stomatologi mutaxassislari faoliyat yuritadi.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Qabul yo'nalishlari qanday?",
+    "answer": "Tish og'rig'i va tish davolash, tishlarni tozalash, ortodontiya, implantatsiya, protezlash, tish olish va bolalar stomatologiyasi yo'nalishlari bo'yicha qabul mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Implantatsiya qilasizmi?",
+    "answer": "Ha, klinikada implantatsiya xizmati mavjud. Implantolog - Bekzod Aliyev.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Implant qo'yasizmi?",
+    "answer": "Ha, klinikada implantatsiya xizmati mavjud. Implantolog - Bekzod Aliyev.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Вы делаете имплантацию?",
+    "answer": "Ha, klinikada implantatsiya xizmati mavjud. Implantolog - Bekzod Aliyev.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Tishlarni oqartirasizmi?",
+    "answer": "Ha, klinikada tishlarni oqartirish xizmati mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Tish oqartirish bormi?",
+    "answer": "Ha, klinikada tishlarni oqartirish xizmati mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Breket qo'yasizmi?",
+    "answer": "Ha, klinikada ortodontiya xizmati mavjud. Ortodont - Dilnoza Rahimova.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Ortodontiya bormi?",
+    "answer": "Ha, klinikada ortodontiya xizmati mavjud. Ortodont - Dilnoza Rahimova.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Tishlarni to'g'rilaysizmi?",
+    "answer": "Ha, klinikada ortodontiya xizmati mavjud. Ortodont - Dilnoza Rahimova.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Bolalarni qabul qilasizmi?",
+    "answer": "Ha, klinikada bolalar stomatologiyasi xizmati mavjud. Bolalar stomatologi - Madina Xasanova.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Bolalar stomatologi bormi?",
+    "answer": "Ha, klinikada bolalar stomatologiyasi xizmati mavjud. Bolalar stomatologi - Madina Xasanova.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Детский стоматолог есть?",
+    "answer": "Ha, klinikada bolalar stomatologiyasi xizmati mavjud. Bolalar stomatologi - Madina Xasanova.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Tish olasizmi?",
+    "answer": "Ha, klinikada tish olish xizmati mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Protez qilasizmi?",
+    "answer": "Ha, klinikada protezlash xizmati mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Tish tozalash bormi?",
+    "answer": "Ha, klinikada professional tish tozalash xizmati mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Plomba qo'yasizmi?",
+    "answer": "Ha, klinikada plomba qo'yish xizmati mavjud.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Tish davolaysizmi?",
+    "answer": "Ha, klinikada tish davolash xizmati mavjud. Stomatolog-terapevt - Anvar Karimov.",
+    "category": "xizmatlar"
+  },
+  {
+    "question": "Qaysi shifokorlar bor?",
+    "answer": "Anvar Karimov - stomatolog-terapevt. Dilnoza Rahimova - ortodont. Bekzod Aliyev - implantolog. Madina Xasanova - bolalar stomatologi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Shifokorlaringiz kimlar?",
+    "answer": "Anvar Karimov - stomatolog-terapevt. Dilnoza Rahimova - ortodont. Bekzod Aliyev - implantolog. Madina Xasanova - bolalar stomatologi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Врачи у вас какие?",
+    "answer": "Anvar Karimov - stomatolog-terapevt. Dilnoza Rahimova - ortodont. Bekzod Aliyev - implantolog. Madina Xasanova - bolalar stomatologi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Shifokorlarning qabul kunlari qanday?",
+    "answer": "Anvar Karimov (stomatolog-terapevt) - Dushanba-Juma, 09:00-17:00. Dilnoza Rahimova (ortodont) - Seshanba-Shanba, 10:00-18:00. Bekzod Aliyev (implantolog) - Dushanba-Shanba, 09:00-16:00. Madina Xasanova (bolalar stomatologi) - Dushanba-Juma, 10:00-18:00.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Doktorlar qachon qabul qiladi?",
+    "answer": "Anvar Karimov (stomatolog-terapevt) - Dushanba-Juma, 09:00-17:00. Dilnoza Rahimova (ortodont) - Seshanba-Shanba, 10:00-18:00. Bekzod Aliyev (implantolog) - Dushanba-Shanba, 09:00-16:00. Madina Xasanova (bolalar stomatologi) - Dushanba-Juma, 10:00-18:00.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Anvar Karimov qachon qabul qiladi?",
+    "answer": "Anvar Karimov (stomatolog-terapevt) Dushanba-Juma kunlari 09:00-17:00 da qabul qiladi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Dilnoza Rahimova qachon qabul qiladi?",
+    "answer": "Dilnoza Rahimova (ortodont) Seshanba-Shanba kunlari 10:00-18:00 da qabul qiladi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Bekzod Aliyev qachon qabul qiladi?",
+    "answer": "Bekzod Aliyev (implantolog) Dushanba-Shanba kunlari 09:00-16:00 da qabul qiladi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Madina Xasanova qachon qabul qiladi?",
+    "answer": "Madina Xasanova (bolalar stomatologi) Dushanba-Juma kunlari 10:00-18:00 da qabul qiladi.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Ortodont kim?",
+    "answer": "Ortodont - Dilnoza Rahimova. U tishlarning joylashuvi va tish qatorini to'g'rilash bilan shug'ullanadi. Qabul: Seshanba-Shanba, 10:00-18:00.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Implantolog kim?",
+    "answer": "Implantolog - Bekzod Aliyev. U implantatsiya bilan shug'ullanadi. Qabul: Dushanba-Shanba, 09:00-16:00.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Bolalar shifokori kim?",
+    "answer": "Bolalar stomatologi - Madina Xasanova. Qabul: Dushanba-Juma, 10:00-18:00.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Terapevt kim?",
+    "answer": "Stomatolog-terapevt - Anvar Karimov. U tishlarni davolash bilan shug'ullanadi. Qabul: Dushanba-Juma, 09:00-17:00.",
+    "category": "shifokorlar"
+  },
+  {
+    "question": "Qanday qilib qabulga yozilsam bo'ladi?",
+    "answer": "Qabulga yozilish uchun telefon raqamingizni qoldirishingiz mumkin. Call-markaz xodimimiz siz bilan bog'lanib, sizga qulay qabul vaqtini belgilashga yordam beradi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Qabulga yozilmoqchiman",
+    "answer": "Qabulga yozilish uchun telefon raqamingizni qoldirishingiz mumkin. Call-markaz xodimimiz siz bilan bog'lanib, sizga qulay qabul vaqtini belgilashga yordam beradi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Navbat olsam bo'ladimi?",
+    "answer": "Qabulga yozilish uchun telefon raqamingizni qoldirishingiz mumkin. Call-markaz xodimimiz siz bilan bog'lanib, sizga qulay qabul vaqtini belgilashga yordam beradi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Қабулга ёзилмоқчиман",
+    "answer": "Qabulga yozilish uchun telefon raqamingizni qoldirishingiz mumkin. Call-markaz xodimimiz siz bilan bog'lanib, sizga qulay qabul vaqtini belgilashga yordam beradi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Как записаться на приём?",
+    "answer": "Qabulga yozilish uchun telefon raqamingizni qoldirishingiz mumkin. Call-markaz xodimimiz siz bilan bog'lanib, sizga qulay qabul vaqtini belgilashga yordam beradi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Хочу записаться",
+    "answer": "Qabulga yozilish uchun telefon raqamingizni qoldirishingiz mumkin. Call-markaz xodimimiz siz bilan bog'lanib, sizga qulay qabul vaqtini belgilashga yordam beradi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Stomatologga yozilmoqchiman",
+    "answer": "Albatta. Qaysi yo'nalishdagi stomatologga murojaat qilmoqchisiz? Agar aniq bilmasangiz, telefon raqamingizni qoldiring, call-markaz xodimimiz siz bilan bog'lanadi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Bugun qabul bormi?",
+    "answer": "Bugungi bo'sh qabul vaqtlarini aniqlab berishimiz mumkin. Telefon raqamingizni qoldirsangiz, call-markaz xodimimiz siz bilan bog'lanadi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Ertaga joy bormi?",
+    "answer": "Bo'sh qabul vaqtlarini aniqlab berishimiz mumkin. Telefon raqamingizni qoldirsangiz, call-markaz xodimimiz siz bilan bog'lanadi.",
+    "category": "qabul"
+  },
+  {
+    "question": "Qaysi vaqtlarda qabul bor?",
+    "answer": "Qabul vaqtlari shifokor va mutaxassisga qarab farq qiladi. Qaysi shifokorga yozilmoqchi ekaningizni aytsangiz, sizga ma'lumot beramiz.",
+    "category": "qabul"
+  },
+  {
+    "question": "Narxlaringiz qanday?",
+    "answer": "Stomatolog konsultatsiyasi - 100 000 so'm. Professional tish tozalash - 250 000 so'mdan. Tishlarni oqartirish - 800 000 so'mdan. Plomba qo'yish - 200 000 so'mdan. Implantatsiya - 3 500 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Нархлари қанча?",
+    "answer": "Stomatolog konsultatsiyasi - 100 000 so'm. Professional tish tozalash - 250 000 so'mdan. Tishlarni oqartirish - 800 000 so'mdan. Plomba qo'yish - 200 000 so'mdan. Implantatsiya - 3 500 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Какие у вас цены?",
+    "answer": "Stomatolog konsultatsiyasi - 100 000 so'm. Professional tish tozalash - 250 000 so'mdan. Tishlarni oqartirish - 800 000 so'mdan. Plomba qo'yish - 200 000 so'mdan. Implantatsiya - 3 500 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Konsultatsiya qancha turadi?",
+    "answer": "Stomatolog konsultatsiyasi - 100 000 so'm.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Сколько стоит консультация?",
+    "answer": "Stomatolog konsultatsiyasi - 100 000 so'm.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Tish tozalash qancha turadi?",
+    "answer": "Professional tish tozalash - 250 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Сколько стоит чистка зубов?",
+    "answer": "Professional tish tozalash - 250 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Tishlarni oqartirish narxi qancha?",
+    "answer": "Tishlarni oqartirish - 800 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Plomba qo'yish qancha turadi?",
+    "answer": "Plomba qo'yish - 200 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Implantatsiya narxi qancha?",
+    "answer": "Implantatsiya - 3 500 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Implant qancha turadi?",
+    "answer": "Implantatsiya - 3 500 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Сколько стоит имплантация?",
+    "answer": "Implantatsiya - 3 500 000 so'mdan.",
+    "category": "narxlar"
+  },
+  {
+    "question": "Qabulga qanday tayyorlanish kerak?",
+    "answer": "Qabulga kelishdan oldin maxsus tayyorgarlik talab qilinishi xizmat turiga qarab farq qiladi. Qaysi xizmatga yozilmoqchi ekaningizni aytsangiz, sizga tegishli ma'lumotni beramiz.",
+    "category": "tashkiliy"
+  },
+  {
+    "question": "Qaysi hujjatlar kerak?",
+    "answer": "Qabulga kelishda pasport yoki shaxsni tasdiqlovchi hujjat olib kelishingiz kerak. Qo'shimcha hujjatlar xizmat turiga qarab talab qilinishi mumkin.",
+    "category": "tashkiliy"
+  },
+  {
+    "question": "Какие документы нужны?",
+    "answer": "Qabulga kelishda pasport yoki shaxsni tasdiqlovchi hujjat olib kelishingiz kerak. Qo'shimcha hujjatlar xizmat turiga qarab talab qilinishi mumkin.",
+    "category": "tashkiliy"
+  },
+  {
+    "question": "Pasport kerakmi?",
+    "answer": "Qabulga kelishda pasport yoki shaxsni tasdiqlovchi hujjat olib kelishingiz kerak.",
+    "category": "tashkiliy"
+  },
+  {
+    "question": "Analiz natijalarini qayerga yuborish kerak?",
+    "answer": "Analiz natijalarini klinikaning Telegram manzili orqali yuborishingiz mumkin: @DentClinic_uz. Agar qo'shimcha ma'lumot kerak bo'lsa, telefon raqamingizni qoldiring.",
+    "category": "tashkiliy"
+  },
+  {
+    "question": "Telegramingiz bormi?",
+    "answer": "Klinikaning Telegram manzili: @DentClinic_uz",
+    "category": "tashkiliy"
+  },
+  {
+    "question": "Tishim og'riyapti",
+    "answer": "Siz stomatolog-terapevt qabuliga murojaat qilishingiz mumkin. Qabulga yozilish uchun telefon raqamingizni qoldirsangiz, call-markaz xodimimiz siz bilan bog'lanadi.",
+    "category": "yo'naltirish"
+  },
+  {
+    "question": "Тишим оғрияпти",
+    "answer": "Siz stomatolog-terapevt qabuliga murojaat qilishingiz mumkin. Qabulga yozilish uchun telefon raqamingizni qoldirsangiz, call-markaz xodimimiz siz bilan bog'lanadi.",
+    "category": "yo'naltirish"
+  },
+  {
+    "question": "Зуб болит",
+    "answer": "Siz stomatolog-terapevt qabuliga murojaat qilishingiz mumkin. Qabulga yozilish uchun telefon raqamingizni qoldirsangiz, call-markaz xodimimiz siz bilan bog'lanadi.",
+    "category": "yo'naltirish"
+  },
+  {
+    "question": "Qaysi doktorga borishim kerak?",
+    "answer": "Qaysi muammo bo'yicha murojaat qilmoqchisiz: tish og'rig'i, tishlarni davolash, breket, implantatsiya, tish tozalash yoki boshqa masala? Aytsangiz, sizga mos yo'nalishni ayta olamiz.",
+    "category": "yo'naltirish"
+  },
+  {
+    "question": "Tishim bilan muammo bor",
+    "answer": "Muammoingiz haqida biroz batafsilroq yozib bera olasizmi? Shundan so'ng sizga qaysi yo'nalish bo'yicha murojaat qilish mumkinligi haqida ma'lumot beramiz.",
+    "category": "yo'naltirish"
+  },
+  {
+    "question": "Menga doktor kerak",
+    "answer": "Albatta. Qaysi masala bo'yicha shifokorga murojaat qilmoqchisiz?",
+    "category": "yo'naltirish"
+  },
+  {
+    "question": "Batafsil ma'lumot kerak",
+    "answer": "Qaysi xizmat yoki masala bo'yicha ma'lumot kerakligini yozib qoldiring, sizga kerakli ma'lumotni beramiz.",
+    "category": "yo'naltirish"
+  }
+]
