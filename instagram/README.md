@@ -12,6 +12,13 @@ platform knows about itself lives under `app/channels/`, and everything else
 (the answer pipeline, the conversation store, the database) is
 platform-neutral and meant to be reached by both bots without a second copy.
 
+**Merge in progress.** As of the unified-schema migration
+(`b93c5e17a204`), the database schema here is the *shared* one — it already
+carries the tables and columns the Telegram bot needs (`doctors`, `leads`,
+the merged `appointments` shape). The Telegram adapter and its admin panel
+land in the next phases, after which this directory becomes the single
+application and is renamed. See the merge plan for the phasing.
+
 Everything below is relative to this directory — run `make`, `pytest`,
 `alembic` and `docker compose` from `instagram/`, not from the repository
 root. The one piece deliberately left at the root is

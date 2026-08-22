@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.passwords import hash_password
 from app.core.tenant_context import TenantContextError, get_current_tenant
+from app.models.appointment import AppointmentStatus
 from app.models.message import Message
 from app.rag.embeddings import EMBEDDING_DIMENSIONS
 from app.repositories.appointment import AppointmentRepository
@@ -19,7 +20,9 @@ from app.repositories.base import (
 )
 from app.repositories.channel import ChannelRepository
 from app.repositories.conversation import ConversationRepository
+from app.repositories.doctor import DoctorRepository
 from app.repositories.knowledge_base import KnowledgeBaseRepository
+from app.repositories.lead import LeadRepository
 from app.repositories.message import MessageRepository
 from app.repositories.operator import OperatorRepository
 from app.repositories.user import UserRepository
@@ -63,10 +66,21 @@ def _new_operator_kwargs(seed: Seed) -> dict[str, Any]:
 def _new_appointment_kwargs(seed: Seed) -> dict[str, Any]:
     return {
         "user_id": seed.a.user.id,
-        "doctor": "Dr. New",
-        "scheduled_at": datetime.now(UTC),
-        "status": "scheduled",
+        "doctor_name": "Dr. New",
+        # An hour off the seeded booking: uq_appointments_tenant_id_scheduled_at
+        # now covers confirmed as well as scheduled, so a second row at the
+        # same instant would collide with the seed's own appointment.
+        "scheduled_at": datetime.now(UTC) + timedelta(hours=1),
+        "status": AppointmentStatus.SCHEDULED,
     }
+
+
+def _new_doctor_kwargs(seed: Seed) -> dict[str, Any]:
+    return {"name": "Dr. New", "specialty": "Ortodont", "working_hours": "10:00 - 17:00"}
+
+
+def _new_lead_kwargs(seed: Seed) -> dict[str, Any]:
+    return {"patient_name": "Yangi bemor", "phone": "+998 90 111 22 33"}
 
 
 TENANT_SCOPED_CASES: list[
@@ -78,6 +92,8 @@ TENANT_SCOPED_CASES: list[
     ("knowledge_base", KnowledgeBaseRepository, _new_knowledge_base_kwargs),
     ("operator", OperatorRepository, _new_operator_kwargs),
     ("appointment", AppointmentRepository, _new_appointment_kwargs),
+    ("doctor", DoctorRepository, _new_doctor_kwargs),
+    ("lead", LeadRepository, _new_lead_kwargs),
 ]
 CASE_IDS = [case[0] for case in TENANT_SCOPED_CASES]
 

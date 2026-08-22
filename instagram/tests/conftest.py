@@ -13,10 +13,12 @@ from app.core.config import get_settings
 from app.core.encryption import encrypt
 from app.core.passwords import hash_password
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
-from app.models.appointment import Appointment
+from app.models.appointment import Appointment, AppointmentStatus
 from app.models.channel import Channel
 from app.models.conversation import Conversation
+from app.models.doctor import Doctor
 from app.models.knowledge_base import KnowledgeBase
+from app.models.lead import Lead
 from app.models.message import Message
 from app.models.operator import Operator
 from app.models.tenant import Tenant
@@ -25,7 +27,9 @@ from app.rag.embeddings import EMBEDDING_DIMENSIONS
 from app.repositories.appointment import AppointmentRepository
 from app.repositories.channel import ChannelRepository
 from app.repositories.conversation import ConversationRepository
+from app.repositories.doctor import DoctorRepository
 from app.repositories.knowledge_base import KnowledgeBaseRepository
+from app.repositories.lead import LeadRepository
 from app.repositories.message import MessageRepository
 from app.repositories.operator import OperatorRepository
 from app.repositories.tenant import TenantRepository
@@ -104,7 +108,9 @@ class TenantSeed:
     conversation: Conversation
     knowledge_base: KnowledgeBase
     operator: Operator
+    doctor: Doctor
     appointment: Appointment
+    lead: Lead
     message: Message
 
 
@@ -158,11 +164,24 @@ async def seed(
                 username=f"dr.smith-{tenant.id}",
                 password_hash=hash_password("seed-password"),
             )
+            doctor = await DoctorRepository(db_session).create(
+                name="Dr. Smith",
+                specialty="Stomatolog",
+                working_hours="09:00 - 18:00",
+            )
             appointment = await AppointmentRepository(db_session).create(
                 user_id=user.id,
-                doctor="Dr. Smith",
+                doctor_id=doctor.id,
+                doctor_name=doctor.name,
                 scheduled_at=datetime.now(UTC),
-                status="scheduled",
+                status=AppointmentStatus.SCHEDULED,
+            )
+            lead = await LeadRepository(db_session).create(
+                user_id=user.id,
+                conversation_id=conversation.id,
+                patient_name="Aziza",
+                phone="+998 90 000 00 00",
+                topic="implant",
             )
             message = await MessageRepository(db_session).create(
                 conversation_id=conversation.id,
@@ -176,7 +195,9 @@ async def seed(
             conversation=conversation,
             knowledge_base=knowledge_base,
             operator=operator,
+            doctor=doctor,
             appointment=appointment,
+            lead=lead,
             message=message,
         )
 

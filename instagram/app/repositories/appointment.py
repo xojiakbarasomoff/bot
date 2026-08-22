@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.core.tenant_context import get_current_tenant
-from app.models.appointment import Appointment
+from app.models.appointment import ACTIVE_STATUSES, Appointment
 from app.repositories.base import CrossTenantAccessError, TenantScopedRepository
 
 
@@ -13,23 +13,31 @@ class AppointmentRepository(TenantScopedRepository[Appointment]):
     model = Appointment
 
     async def get_active_at(self, scheduled_at: datetime) -> Appointment | None:
-        """The currently-booked (status='scheduled') appointment at this
-        exact instant, if any — mirrors what the partial unique index
-        enforces at the DB level.
+        """The booking holding this exact instant, if any — mirrors what the
+        partial unique index enforces at the DB level.
+
+        "Holding" means any of ACTIVE_STATUSES, not just `scheduled`: a
+        confirmed booking occupies its slot just as firmly as an
+        unconfirmed one, and reading only `scheduled` would report a
+        confirmed slot as free.
         """
-        return await self._get(
-            tenant_id=get_current_tenant(), scheduled_at=scheduled_at, status="scheduled"
+        stmt = select(Appointment).where(
+            Appointment.tenant_id == get_current_tenant(),
+            Appointment.scheduled_at == scheduled_at,
+            Appointment.status.in_(ACTIVE_STATUSES),
         )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def list_active_between(self, start: datetime, end: datetime) -> Sequence[Appointment]:
-        """Every active booking in [start, end) for the current tenant.
+        """Every slot-holding booking in [start, end) for the current tenant.
 
         Used by find_next_free_slot() to fetch a whole search window's busy
         slots in one round trip, rather than one query per candidate slot.
         """
         stmt = select(Appointment).where(
             Appointment.tenant_id == get_current_tenant(),
-            Appointment.status == "scheduled",
+            Appointment.status.in_(ACTIVE_STATUSES),
             Appointment.scheduled_at >= start,
             Appointment.scheduled_at < end,
         )

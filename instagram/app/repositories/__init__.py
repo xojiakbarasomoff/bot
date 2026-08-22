@@ -8,7 +8,9 @@ from app.repositories.base import (
 )
 from app.repositories.channel import ChannelRepository
 from app.repositories.conversation import ConversationRepository
+from app.repositories.doctor import DoctorRepository
 from app.repositories.knowledge_base import KnowledgeBaseRepository
+from app.repositories.lead import LeadRepository
 from app.repositories.message import MessageRepository
 from app.repositories.operator import OperatorRepository
 from app.repositories.tenant import TenantRepository
@@ -20,7 +22,9 @@ __all__ = [
     "ChannelRepository",
     "ConversationRepository",
     "CrossTenantAccessError",
+    "DoctorRepository",
     "KnowledgeBaseRepository",
+    "LeadRepository",
     "MessageRepository",
     "MissingTenantColumnError",
     "OperatorRepository",

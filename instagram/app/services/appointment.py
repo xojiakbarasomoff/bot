@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 
-from app.models.appointment import Appointment
+from app.models.appointment import Appointment, AppointmentStatus
 from app.repositories.appointment import AppointmentRepository
 
 # TODO(IGB-?): move onto Tenant.settings once the admin/dashboard panel
@@ -16,7 +16,12 @@ CLINIC_TIMEZONE = ZoneInfo("Asia/Tashkent")
 SLOT_MINUTES = 30
 WORK_START = time(9, 0)
 WORK_END = time(19, 0)
-DEFAULT_DOCTOR_NAME = "Dr. Aziza Karimova"  # placeholder until multi-doctor support exists
+# Used when a booking names no doctor at all. The clinic's real clinicians
+# now live in the doctors table (app.models.doctor), so this is no longer a
+# stand-in for "multi-doctor support does not exist" — it is the fallback for
+# a booking taken before anyone was assigned, which an operator resolves
+# later from the dashboard.
+UNASSIGNED_DOCTOR_NAME = "Tayinlanmagan"
 DEFAULT_SEARCH_HORIZON_DAYS = 14
 
 
@@ -165,7 +170,10 @@ async def create_appointment(
     user_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
     patient_name: str | None = None,
-    doctor: str = DEFAULT_DOCTOR_NAME,
+    doctor_name: str = UNASSIGNED_DOCTOR_NAME,
+    doctor_id: uuid.UUID | None = None,
+    patient_phone: str | None = None,
+    notes: str | None = None,
 ) -> Appointment:
     """Books scheduled_at, refusing to double-book.
 
@@ -198,11 +206,14 @@ async def create_appointment(
             return await repo.create(
                 user_id=user_id,
                 scheduled_at=scheduled_at,
-                status="scheduled",
+                status=AppointmentStatus.SCHEDULED,
                 source=source,
                 conversation_id=conversation_id,
                 patient_name=patient_name,
-                doctor=doctor,
+                doctor_name=doctor_name,
+                doctor_id=doctor_id,
+                patient_phone=patient_phone,
+                notes=notes,
             )
     except IntegrityError:
         raise SlotAlreadyBookedError(scheduled_at) from None
@@ -212,4 +223,14 @@ async def cancel_appointment(repo: AppointmentRepository, appointment: Appointme
     """Cancels a booking, which — via the partial unique index — immediately
     frees its slot for rebooking.
     """
-    return await repo.update(appointment, status="cancelled")
+    return await repo.update(appointment, status=AppointmentStatus.CANCELLED)
+
+
+async def confirm_appointment(repo: AppointmentRepository, appointment: Appointment) -> Appointment:
+    """Marks a booking as confirmed with the patient.
+
+    Still holds its slot (see ACTIVE_STATUSES) — confirming records that
+    somebody spoke to the patient, it does not change what the time is
+    booked for.
+    """
+    return await repo.update(appointment, status=AppointmentStatus.CONFIRMED)

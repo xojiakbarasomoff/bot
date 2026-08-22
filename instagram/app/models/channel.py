@@ -1,7 +1,17 @@
 import uuid
+from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -36,3 +46,14 @@ class Channel(Base):
     # special case to accidentally leave unprotected.
     credentials: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    # Per-channel settings that belong to the platform rather than to the
+    # clinic: a Telegram webhook secret, the ids the bot treats as admins,
+    # a Mini App URL. Deliberately not folded into Tenant.settings — one
+    # clinic can run two accounts on the same platform, and each needs its
+    # own values.
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()"), nullable=False
+    )
