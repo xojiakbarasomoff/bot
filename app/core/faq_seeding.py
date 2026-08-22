@@ -28,6 +28,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.channels.base import ChannelType
 from app.core.config import Settings
 from app.core.db import db_session
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
@@ -36,7 +37,7 @@ from app.services.knowledge_base import FAQImport, ingest_faqs
 
 logger = logging.getLogger(__name__)
 
-CHANNEL_TYPE = "instagram"
+CHANNEL_TYPE = ChannelType.INSTAGRAM
 
 # Generous next to provisioning's 15s, because this waits on an embedding API
 # round trip for the whole file as well as the database. Still bounded: this
@@ -136,9 +137,7 @@ async def seed_faqs_if_configured(settings: Settings) -> None:
             logger.warning("faq_seeding_skipped_empty_file path=%s", path)
             return
         async with db_session() as session:
-            tenant_id, count = await seed_faqs(
-                session, faqs, settings.provision_ig_account_id
-            )
+            tenant_id, count = await seed_faqs(session, faqs, settings.provision_ig_account_id)
         # WARNING, not INFO: "this deployment reloaded its knowledge base" is
         # worth finding later without having to widen a log filter.
         logger.warning("faq_seeding_complete tenant_id=%s rows=%s path=%s", tenant_id, count, path)

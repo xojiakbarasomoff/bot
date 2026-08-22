@@ -37,9 +37,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "ruff>=0.7",
-    "black>=24.10",
-    "mypy>=1.13",
+    # The three gate tools are pinned exactly, not floored. CI runs
+    # `ruff check`, `black --check` and `mypy` as pass/fail gates, and all
+    # three change what they accept between releases -- black reflows code
+    # it used to leave alone, ruff adds rules to the selected sets, mypy
+    # gets stricter. With a floor like ">=24.10" the gate is really "latest
+    # at install time", so a green branch turns red on a day nobody touched
+    # it, and the fix is a formatting-only commit that collides with every
+    # branch in flight. Bumping these is a deliberate commit of its own.
+    "ruff==0.16.4",
+    "black==26.5.1",
+    "mypy==2.3.1",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",

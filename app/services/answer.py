@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.rag.embeddings import EmbeddingProvider
-from app.rag.llm import LLMProvider, get_llm_provider
+from app.rag.llm import ChatMessage, LLMProvider, get_llm_provider
 from app.rag.retrieval import retrieve_relevant_faqs
 from app.repositories.knowledge_base import KnowledgeBaseMatch
 from app.services.guardrail import GuardrailCategory, GuardrailClassifier, evaluate_guardrail
@@ -16,7 +16,7 @@ from app.services.guardrail import GuardrailCategory, GuardrailClassifier, evalu
 # places that had already been copy-pasted apart.
 _PREAMBLE = """\
 You are a warm, friendly front-desk assistant for a dental clinic, chatting with \
-patients over Instagram Direct Messages.
+patients in a direct-message conversation.
 
 Reply in the same language the patient wrote in, and in the same alphabet they \
 typed it in. Uzbek is written both in Latin ("Assalom alaykum", "tishim \
@@ -268,9 +268,7 @@ def _build_system_prompt(
         "clinic_facts": _clinic_facts_block(clinic_address, clinic_phone_numbers),
     }
     if matches:
-        prompt = _SYSTEM_PROMPT_TEMPLATE.format(
-            faq_context=_format_faq_context(matches), **shared
-        )
+        prompt = _SYSTEM_PROMPT_TEMPLATE.format(faq_context=_format_faq_context(matches), **shared)
     else:
         prompt = _NO_FAQ_SYSTEM_PROMPT.format(**shared)
     if flagged_as_medical_advice:
@@ -285,6 +283,7 @@ async def generate_answer(
     llm_provider: LLMProvider | None = None,
     guardrail_classifier: GuardrailClassifier | None = None,
     settings: Settings | None = None,
+    history: Sequence[ChatMessage] | None = None,
 ) -> str:
     """Turn an incoming patient message into a reply: guardrail check, then
     (unless it's an emergency) retrieve relevant FAQs and ask the LLM to
@@ -297,6 +296,14 @@ async def generate_answer(
     clinic specifics and medical advice — for a deployment whose knowledge
     base isn't populated yet, where one fixed refusal to every message is
     worse than a general reply.
+
+    `history` is the conversation's earlier turns, oldest first, and is what
+    lets a patient say "va narxi qancha?" and be understood. Retrieval and
+    the guardrail still run against `user_message` alone, since those judge
+    what was just asked rather than the whole conversation. Callers get it
+    from app.services.conversation.context_for_reply, which already excludes
+    the messages being answered right now, so appending user_message here
+    cannot repeat them.
     """
     resolved_settings = settings or get_settings()
 
@@ -327,4 +334,8 @@ async def generate_answer(
         clinic_address=resolved_settings.clinic_address,
     )
     provider = llm_provider or get_llm_provider()
-    return await provider.generate(system_prompt, [{"role": "user", "content": user_message}])
+    conversation: list[ChatMessage] = [
+        *(history or []),
+        ChatMessage(role="user", content=user_message),
+    ]
+    return await provider.generate(system_prompt, conversation)

@@ -35,7 +35,12 @@ def _new_user_kwargs(seed: Seed) -> dict[str, Any]:
 
 
 def _new_conversation_kwargs(seed: Seed) -> dict[str, Any]:
-    return {"user_id": seed.a.user.id, "status": "open"}
+    # Closed, not open: the seeded user already has an open conversation and
+    # uq_conversations_open_per_user allows only one at a time. These cases
+    # are about tenant stamping and cross-tenant reads, so any valid row
+    # serves — a second *open* one would be testing the wrong thing, and is
+    # covered directly in test_conversation_service.py instead.
+    return {"user_id": seed.a.user.id, "status": "closed"}
 
 
 def _new_knowledge_base_kwargs(seed: Seed) -> dict[str, Any]:

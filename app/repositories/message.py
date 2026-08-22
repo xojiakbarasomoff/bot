@@ -1,12 +1,13 @@
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
 
 from app.core.tenant_context import get_current_tenant
 from app.models.conversation import Conversation
-from app.models.message import Message
+from app.models.message import Message, MessageSender
 from app.repositories.base import BaseRepository, CrossTenantAccessError
 
 
@@ -40,6 +41,50 @@ class MessageRepository(BaseRepository[Message]):
         )
         result = await self.session.execute(stmt)
         return result.scalars().all()
+
+    async def list_recent(self, conversation_id: uuid.UUID, limit: int) -> Sequence[Message]:
+        """The last `limit` messages of a conversation, oldest first.
+
+        Selected newest-first in SQL (so Postgres uses the index and reads
+        `limit` rows, not the whole conversation) then reversed here, since
+        every caller wants them in the order they were said — an LLM's
+        message list, or a transcript on screen.
+        """
+        stmt = (
+            select(Message)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Conversation.tenant_id == get_current_tenant(),
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(reversed(result.scalars().all()))
+
+    async def last_inbound_at(self, conversation_id: uuid.UUID) -> datetime | None:
+        """When this conversation last heard from the patient, or None if it
+        never has.
+
+        This is what a platform's reply window is measured against (see
+        ChannelAdapter.delivery_block_reason) — a real recorded timestamp,
+        rather than the "assume now" placeholder the worker used before
+        inbound messages were persisted at all.
+        """
+        stmt = (
+            select(Message.created_at)
+            .join(Conversation, Message.conversation_id == Conversation.id)
+            .where(
+                Message.conversation_id == conversation_id,
+                Conversation.tenant_id == get_current_tenant(),
+                Message.sender == MessageSender.PATIENT,
+            )
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def create(self, **values: Any) -> Message:
         conversation_id = values.get("conversation_id")

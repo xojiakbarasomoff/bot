@@ -21,7 +21,7 @@ class Channel(Base):
     # The platform's own identifier for this account (IG page/account id,
     # Telegram bot id, etc). This is what an inbound webhook gives us to
     # figure out which tenant it belongs to — see
-    # app.services.tenant_resolution.resolve_tenant_for_ig_account(). Unique
+    # app.services.tenant_resolution.resolve_instagram_channel(). Unique
     # per type, not globally: different platforms have separate id
     # namespaces, so two channels of different types could coincidentally
     # share an id string.
@@ -31,7 +31,7 @@ class Channel(Base):
     # insert, decrypted with app.core.encryption.decrypt at the one place
     # that needs the real value (app.workers.tasks._send_reply). This
     # includes the "no real token yet" placeholder sentinels (see
-    # app.services.instagram_client.is_placeholder_credential) — nothing
+    # app.channels.instagram.client.is_placeholder_credential) — nothing
     # ever goes into this column unencrypted, so there's no plaintext
     # special case to accidentally leave unprotected.
     credentials: Mapped[str] = mapped_column(Text, nullable=False)

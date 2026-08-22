@@ -24,19 +24,20 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.channels.base import ChannelType
+from app.channels.instagram.client import is_placeholder_credential
 from app.core.config import Settings
 from app.core.db import db_session
 from app.core.encryption import decrypt, encrypt
 from app.models.channel import Channel
 from app.models.tenant import Tenant
-from app.services.instagram_client import is_placeholder_credential
 
 logger = logging.getLogger(__name__)
 
-CHANNEL_TYPE = "instagram"
+CHANNEL_TYPE = ChannelType.INSTAGRAM
 
 # What a channel's credentials hold until a real token is supplied.
-# app.services.instagram_client reads it as "not configured yet" and skips
+# app.channels.instagram.client reads it as "not configured yet" and skips
 # sending, rather than calling Meta with a value that cannot work.
 _PLACEHOLDER = "pending"
 

@@ -290,9 +290,7 @@ async def test_prompt_requires_replying_in_the_alphabet_the_patient_used(
     Latin has been replied to in their language and still cannot comfortably
     read it.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "same alphabet they" in system_prompt
     assert "answer a Cyrillic message in Cyrillic and a Latin message in Latin" in system_prompt
@@ -310,9 +308,7 @@ async def test_prompt_carries_the_expected_greeting_for_each_language(
     to its own devices returns "Salom" or the English "Hello" instead -- which
     reads, to the patient, as a clinic that did not greet them back.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "Va alaykum assalom" in system_prompt
     assert "Ва алайкум ассалом" in system_prompt
@@ -331,9 +327,7 @@ async def test_prompt_asks_for_a_phone_number_for_the_call_centre(
     persists it yet, so the prompt is currently the only thing that gets it
     asked for at all.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "asking for" in system_prompt
     assert "phone number so a colleague can call them back" in system_prompt
@@ -427,9 +421,7 @@ async def test_prompt_forbids_inventing_somewhere_else_to_go(
     use general knowledge, which is exactly what would produce a confident,
     fictional referral to a clinic across town.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "must NOT name another clinic" in system_prompt
     assert "Afsuski, bizda bunday ma'lumot yo'q" in system_prompt
@@ -468,9 +460,7 @@ async def test_pricing_fallback_invents_no_number_when_none_is_configured(
     patients to "call these numbers" with no numbers given will produce a
     plausible +998 one. The prompt must drop that half of the offer instead.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "ushbu telefon raqamlariga qo'ng'iroq qiling" not in system_prompt
     assert "You have NOT been given a phone number" in system_prompt
@@ -489,9 +479,7 @@ async def test_prompt_forbids_dodging_a_price_with_an_estimate(
     """A quoted range the clinic never agreed to is worse than no answer: the
     patient arrives expecting it.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "do not give a range" in system_prompt
     assert "do not say a doctor will decide" in system_prompt
@@ -562,9 +550,7 @@ async def test_no_facts_section_appears_when_nothing_is_configured(
     """An empty deployment must not be told it has details it does not have --
     an empty "Address:" line is an invitation to fill it in.
     """
-    system_prompt = await _capture_system_prompt(
-        db_session, seed, as_tenant, with_faq=with_faq
-    )
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
     assert "These clinic details are given to you as fact" not in system_prompt
     assert "Address:" not in system_prompt

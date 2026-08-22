@@ -43,7 +43,6 @@ jobs:
       OPENAI_API_KEY: sk-test-placeholder
       WEBHOOK_VERIFY_TOKEN: ci-test-verify-token
       META_APP_SECRET: ci-test-app-secret
-      ENCRYPTION_KEY: Hq3_REB-V0twf7iBgCPCSUZQiG44egxyiZg9kOKRxUg=
       SESSION_SECRET_KEY: ci-test-session-secret-key-not-for-real-use
 
     steps:
@@ -55,6 +54,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+
+      # Generated per run rather than written into this file. A Fernet key
+      # committed to the repository is a real key in public history even
+      # when it only ever encrypted test rows -- and one sitting in a CI
+      # config is the kind of value that gets copied into a deployment
+      # because it was the one that worked. A Fernet key is 32 random bytes
+      # in url-safe base64, which openssl and tr produce without needing
+      # the Python dependencies installed yet.
+      - name: Generate a throwaway encryption key
+        run: |
+          echo "ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')" >> "$GITHUB_ENV"
 
       - name: Install project with dev dependencies
         run: pip install -e ".[dev]"

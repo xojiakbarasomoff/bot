@@ -10,7 +10,7 @@ The handler is attached to the `app` logger, deliberately not to the root.
 Turning root up to INFO switches on every third-party library's INFO output
 too, and two of those are actively harmful here:
 
-* httpx logs each request's full URL, and app.services.instagram_client
+* httpx logs each request's full URL, and app.channels.instagram.client
   authenticates by query parameter -- so an INFO root logger writes a live
   Instagram access token into the log stream on every reply sent.
 * arq installs its own handler on the `arq` logger via dictConfig without

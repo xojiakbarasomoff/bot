@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
-from app.services.instagram_client import (
+from app.channels.instagram.client import (
     GraphAPIInstagramClient,
     InstagramSendError,
     is_placeholder_credential,

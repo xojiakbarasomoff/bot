@@ -1,28 +1,65 @@
+"""Turning a platform's own account id into the tenant and channel it belongs to.
+
+This runs BEFORE any tenant is known — it is what establishes tenant context
+for an inbound event — so unlike the rest of the service layer it queries
+Channel directly rather than through ChannelRepository /
+TenantScopedRepository, both of which require get_current_tenant() to
+already have a value.
+"""
+
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.channels.base import ChannelType
 from app.models.channel import Channel
 
 
-async def resolve_tenant_for_ig_account(
-    session: AsyncSession, ig_account_id: str
-) -> uuid.UUID | None:
-    """Look up which tenant owns the Instagram channel with this account
-    (page) id, or None if no active channel matches — an unknown account
-    must not be processed.
+@dataclass(frozen=True)
+class ResolvedChannel:
+    """Which tenant an inbound event belongs to, and over which channel.
 
-    This runs BEFORE any tenant is known: it's what establishes tenant
-    context for a webhook entry, so unlike the rest of the service layer it
-    queries Channel directly rather than through ChannelRepository /
-    TenantScopedRepository, both of which require get_current_tenant() to
-    already have a value.
+    The channel id matters as much as the tenant: it is the account the
+    patient wrote to, and therefore the only account the reply may be sent
+    from. The pipeline used to carry the tenant alone and then pick a
+    channel to reply through by listing the tenant's channels and taking
+    whichever came back first — see app.services.delivery for what that
+    cost.
     """
-    stmt = select(Channel.tenant_id).where(
-        Channel.type == "instagram",
-        Channel.external_id == ig_account_id,
+
+    tenant_id: uuid.UUID
+    channel_id: uuid.UUID
+    channel_type: str
+
+
+async def resolve_channel(
+    session: AsyncSession, *, channel_type: str, external_id: str
+) -> ResolvedChannel | None:
+    """The active channel with this platform account id, or None.
+
+    None means "no channel we serve" and the event must not be processed —
+    an unknown account is either a stale subscription or someone else's
+    traffic, and neither has a tenant to run under.
+    """
+    stmt = select(Channel.tenant_id, Channel.id).where(
+        Channel.type == channel_type,
+        Channel.external_id == external_id,
         Channel.is_active.is_(True),
     )
-    result = await session.execute(stmt)
-    return result.scalar_one_or_none()
+    row = (await session.execute(stmt)).first()
+    if row is None:
+        return None
+    return ResolvedChannel(tenant_id=row[0], channel_id=row[1], channel_type=channel_type)
+
+
+async def resolve_instagram_channel(
+    session: AsyncSession, ig_account_id: str
+) -> ResolvedChannel | None:
+    """resolve_channel() fixed to Instagram — what the webhook calls, so the
+    channel type string lives here rather than in the route.
+    """
+    return await resolve_channel(
+        session, channel_type=ChannelType.INSTAGRAM, external_id=ig_account_id
+    )

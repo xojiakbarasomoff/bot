@@ -142,7 +142,7 @@ class Settings(BaseSettings):
         stored verbatim.
 
         For the provisioning ids that is silent and total: the newline lands
-        in Channel.external_id, resolve_tenant_for_ig_account can never match
+        in Channel.external_id, resolve_instagram_channel can never match
         it again, and provisioning logs success on one side while every
         webhook logs webhook_unknown_ig_account on the other. For
         clinic_phone_numbers and clinic_address it is merely visible -- the

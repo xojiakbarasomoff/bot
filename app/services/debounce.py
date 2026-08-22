@@ -37,12 +37,26 @@ _POP_IF_CURRENT_GENERATION = _load_script("pop_if_current_generation.lua")
 _CLEAR_IF_LENGTH_UNCHANGED = _load_script("clear_if_length_unchanged.lua")
 
 
-def _messages_key(tenant_id: uuid.UUID, sender_igsid: str) -> str:
-    return f"debounce:{tenant_id}:{sender_igsid}:messages"
+def _key_prefix(tenant_id: uuid.UUID, channel_id: uuid.UUID, sender_external_id: str) -> str:
+    """Namespace for one patient's pending buffer.
+
+    Scoped by channel, not just by tenant and sender id. A platform's user
+    ids are unique only within that platform's own account, so a Telegram
+    chat id and an Instagram-scoped user id can be the same string — and
+    once both bots share this module, a tenant-and-sender key would merge
+    two different patients' messages into one buffer and answer one of them
+    with the other's question. The channel id also separates two Instagram
+    accounts belonging to the same clinic.
+    """
+    return f"debounce:{tenant_id}:{channel_id}:{sender_external_id}"
 
 
-def _generation_key(tenant_id: uuid.UUID, sender_igsid: str) -> str:
-    return f"debounce:{tenant_id}:{sender_igsid}:generation"
+def _messages_key(tenant_id: uuid.UUID, channel_id: uuid.UUID, sender_external_id: str) -> str:
+    return f"{_key_prefix(tenant_id, channel_id, sender_external_id)}:messages"
+
+
+def _generation_key(tenant_id: uuid.UUID, channel_id: uuid.UUID, sender_external_id: str) -> str:
+    return f"{_key_prefix(tenant_id, channel_id, sender_external_id)}:generation"
 
 
 def _decode(values: Sequence[bytes | str]) -> list[str]:
@@ -59,7 +73,11 @@ def join_messages(messages: Sequence[str]) -> str:
 
 
 async def pop_batch_if_current_generation(
-    pool: ArqRedis, tenant_id: uuid.UUID, sender_igsid: str, generation: int
+    pool: ArqRedis,
+    tenant_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    sender_external_id: str,
+    generation: int,
 ) -> list[str] | None:
     """Called by fire_debounce_window. Returns the claimed messages (and
     clears the buffer) if `generation` is still current, or None if this
@@ -67,7 +85,10 @@ async def pop_batch_if_current_generation(
     """
     script = pool.register_script(_POP_IF_CURRENT_GENERATION)
     result = await script(
-        keys=[_generation_key(tenant_id, sender_igsid), _messages_key(tenant_id, sender_igsid)],
+        keys=[
+            _generation_key(tenant_id, channel_id, sender_external_id),
+            _messages_key(tenant_id, channel_id, sender_external_id),
+        ],
         args=[str(generation)],
     )
     if not result:
@@ -91,16 +112,18 @@ async def _try_clear_buffer(
 
 async def handle_inbound_message(
     pool: ArqRedis,
-    tenant_id: uuid.UUID,
-    sender_igsid: str,
-    message_text: str,
     *,
+    tenant_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    sender_external_id: str,
+    message_text: str,
     window_seconds: int | None = None,
     guardrail_classifier: GuardrailClassifier | None = None,
 ) -> None:
-    """Entry point the webhook calls for every genuine inbound message.
+    """Entry point a platform's inbound edge calls for every genuine message.
 
-    Always appends the message to this user's pending buffer first —
+    Always appends the message to this patient's pending buffer first —
     appending is safe regardless of what happens next, so a message is
     never at risk of being lost, only (in a rare race) possibly handled
     twice. Then classifies the buffer's *combined* text, not just this one
@@ -113,9 +136,13 @@ async def handle_inbound_message(
     medical-advice — that redirect framing is still applied correctly later
     since generate_answer re-classifies the final joined batch at fire time)
     schedules/refreshes the normal debounce window.
+
+    Platform-neutral: the ids it carries are a channel and whatever id that
+    channel's platform issued for the patient, so the Telegram bot reaches
+    this same buffering behaviour without a second copy of it.
     """
-    messages_key = _messages_key(tenant_id, sender_igsid)
-    generation_key = _generation_key(tenant_id, sender_igsid)
+    messages_key = _messages_key(tenant_id, channel_id, sender_external_id)
+    generation_key = _generation_key(tenant_id, channel_id, sender_external_id)
     window = (
         window_seconds if window_seconds is not None else get_settings().debounce_window_seconds
     )
@@ -135,7 +162,12 @@ async def handle_inbound_message(
 
     if guardrail.category is GuardrailCategory.EMERGENCY:
         await pool.enqueue_job(
-            PROCESS_INBOUND_MESSAGE_JOB, str(tenant_id), sender_igsid, combined_text
+            PROCESS_INBOUND_MESSAGE_JOB,
+            str(tenant_id),
+            str(channel_id),
+            str(conversation_id),
+            sender_external_id,
+            combined_text,
         )
         if not await _try_clear_buffer(pool, messages_key, generation_key, len(pending)):
             logger.debug("debounce_emergency_buffer_clear_skipped_due_to_race")
@@ -146,7 +178,9 @@ async def handle_inbound_message(
     await pool.enqueue_job(
         FIRE_DEBOUNCE_WINDOW_JOB,
         str(tenant_id),
-        sender_igsid,
+        str(channel_id),
+        str(conversation_id),
+        sender_external_id,
         generation,
         _defer_by=window,
     )

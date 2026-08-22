@@ -97,7 +97,7 @@ def test_extras_stay_on_the_event_line_when_a_traceback_follows() -> None:
 @pytest.mark.usefixtures("_restore_logging")
 def test_handler_is_installed_on_app_not_root() -> None:
     """Root at INFO would switch on httpx's request logging, and
-    app.services.instagram_client authenticates by query parameter -- the
+    app.channels.instagram.client authenticates by query parameter -- the
     access token would land in the log stream on every reply.
     """
     root_handlers_before = logging.getLogger().handlers[:]

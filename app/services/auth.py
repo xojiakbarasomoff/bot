@@ -14,7 +14,7 @@ async def authenticate_operator(
 
     Runs BEFORE any tenant is known — the username is what determines which
     tenant this operator belongs to — so like
-    tenant_resolution.resolve_tenant_for_ig_account, this queries Operator
+    tenant_resolution.resolve_instagram_channel, this queries Operator
     directly rather than through OperatorRepository/TenantScopedRepository,
     both of which require get_current_tenant() to already have a value.
     """

@@ -1,3 +1,15 @@
+"""Instagram's inbound edge.
+
+This module and app.channels.instagram are the only places that know what an
+Instagram webhook payload looks like. Its job is narrow on purpose:
+authenticate the delivery, parse it, work out which channel it belongs to,
+and hand each genuine message to the shared services — the conversation
+store, then the debounce buffer. Everything after that point (retrieval,
+guardrails, the answer prompt, delivery) is platform-neutral and shared with
+the Telegram bot, so this file is roughly what a Telegram webhook route will
+mirror rather than duplicate.
+"""
+
 import hashlib
 import hmac
 import logging
@@ -12,8 +24,10 @@ from app.core.db import get_db_session
 from app.core.queue import get_arq_pool
 from app.core.redaction import preview
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
+from app.services.conversation import register_inbound_message
 from app.services.debounce import handle_inbound_message
-from app.services.tenant_resolution import resolve_tenant_for_ig_account
+from app.services.idempotency import claim_event
+from app.services.tenant_resolution import ResolvedChannel, resolve_instagram_channel
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +43,13 @@ class WebhookRecipient(BaseModel):
 
 
 class WebhookMessage(BaseModel):
+    # Meta's own id for this message. Parsed because it is the idempotency
+    # key: Meta redelivers a payload whose 200 came back too slowly or not
+    # at all, and without a claim on this id the same message is recorded
+    # and answered twice. Optional because Meta does not guarantee it on
+    # every event shape, and a message with no id is better handled once
+    # without dedup than dropped.
+    mid: str | None = None
     text: str | None = None
     is_echo: bool = False
 
@@ -93,62 +114,118 @@ def _is_echo(event: MessagingEvent, page_id: str) -> bool:
     return event.sender.id == page_id
 
 
+async def _handle_event(
+    session: AsyncSession,
+    pool: ArqRedis,
+    channel: ResolvedChannel,
+    event: MessagingEvent,
+    page_id: str,
+) -> None:
+    """One messaging event, from an already-resolved channel under an
+    already-set tenant context. Returns without doing anything for every
+    event shape this pipeline has nothing to say to.
+    """
+    if event.message is None:
+        # Not a message event (e.g. read receipt, postback) — nothing to do yet.
+        return
+
+    if _is_echo(event, page_id):
+        logger.info(
+            "webhook_echo_skipped",
+            extra={"sender_id": event.sender.id, "recipient_id": event.recipient.id},
+        )
+        return
+
+    if event.message.text is None:
+        # Attachment-only message (image, sticker, etc) — nothing for the
+        # FAQ/LLM pipeline to answer yet.
+        logger.info(
+            "webhook_attachment_only_skipped",
+            extra={"sender_id": event.sender.id, "recipient_id": event.recipient.id},
+        )
+        return
+
+    # Claimed before anything is recorded, so a redelivery cannot append a
+    # second copy of the patient's message to the transcript or trigger a
+    # second reply. A message Meta sent without an id is processed without
+    # a claim — handling it once too often beats never handling it.
+    if event.message.mid is not None and not await claim_event(
+        pool,
+        tenant_id=channel.tenant_id,
+        channel_type=channel.channel_type,
+        event_id=event.message.mid,
+    ):
+        logger.info(
+            "webhook_duplicate_skipped",
+            extra={"mid": event.message.mid, "sender_id": event.sender.id},
+        )
+        return
+
+    # Full message text stays out of INFO — it is patient content that
+    # should not sit in logs that may ship to external monitoring (TZ
+    # section 7, personal data). Length + a short truncated preview only.
+    logger.info(
+        "webhook_message_received",
+        extra={
+            "tenant_id": str(channel.tenant_id),
+            "sender_igsid": event.sender.id,
+            "recipient_id": event.recipient.id,
+            "message_length": len(event.message.text),
+            "message_preview": preview(event.message.text),
+        },
+    )
+
+    # Recorded before any decision about answering it: a patient's words
+    # belong in the transcript whether the bot replies, an operator does,
+    # or nothing does.
+    inbound = await register_inbound_message(
+        session,
+        channel_id=channel.channel_id,
+        channel_type=channel.channel_type,
+        sender_external_id=event.sender.id,
+        text=event.message.text,
+    )
+    await session.commit()
+
+    if not inbound.is_bot_enabled:
+        # An operator has taken this conversation over. The bot must not
+        # answer on top of a human — the message is already recorded, which
+        # is the whole of what is wanted here.
+        logger.info(
+            "webhook_bot_disabled_for_conversation",
+            extra={
+                "conversation_id": str(inbound.conversation_id),
+                "sender_igsid": event.sender.id,
+            },
+        )
+        return
+
+    await handle_inbound_message(
+        pool,
+        tenant_id=channel.tenant_id,
+        channel_id=channel.channel_id,
+        conversation_id=inbound.conversation_id,
+        sender_external_id=event.sender.id,
+        message_text=event.message.text,
+    )
+
+
 async def _handle_payload(session: AsyncSession, pool: ArqRedis, payload: WebhookPayload) -> None:
     for entry in payload.entry:
         # entry.id is the IG account (page) id that received the message —
         # one tenant's channel per entry, so resolution happens once per
-        # entry rather than once per messaging event.
-        tenant_id = await resolve_tenant_for_ig_account(session, entry.id)
-        if tenant_id is None:
+        # entry rather than once per messaging event. The channel id it
+        # returns is carried all the way to delivery, so the reply goes out
+        # over the account the patient actually wrote to.
+        channel = await resolve_instagram_channel(session, entry.id)
+        if channel is None:
             logger.warning("webhook_unknown_ig_account", extra={"ig_account_id": entry.id})
             continue
 
-        token = set_current_tenant(tenant_id)
+        token = set_current_tenant(channel.tenant_id)
         try:
             for event in entry.messaging:
-                if event.message is None:
-                    # Not a message event (e.g. read receipt, postback) — nothing to do yet.
-                    continue
-
-                if _is_echo(event, entry.id):
-                    logger.info(
-                        "webhook_echo_skipped",
-                        extra={"sender_id": event.sender.id, "recipient_id": event.recipient.id},
-                    )
-                    continue
-
-                if event.message.text is None:
-                    # Attachment-only message (image, sticker, etc) — nothing
-                    # for the FAQ/LLM pipeline to answer yet.
-                    logger.info(
-                        "webhook_attachment_only_skipped",
-                        extra={"sender_id": event.sender.id, "recipient_id": event.recipient.id},
-                    )
-                    continue
-
-                # Full message text stays out of INFO — it's patient content
-                # that shouldn't sit in logs that may ship to external
-                # monitoring (TZ section 7, personal data). Length + a short
-                # truncated preview only.
-                logger.info(
-                    "webhook_message_received",
-                    extra={
-                        "tenant_id": str(tenant_id),
-                        "sender_igsid": event.sender.id,
-                        "recipient_id": event.recipient.id,
-                        "message_length": len(event.message.text),
-                        "message_preview": preview(event.message.text),
-                    },
-                )
-
-                # TODO(IGB-?): Meta can redeliver the same webhook payload
-                # (slow ack, transient error, etc), which would register and
-                # reply to the same message twice. No dedup yet — needs an
-                # idempotency key (the IG message id) checked before
-                # registering. arq's enqueue_job(_job_id=...) can provide
-                # this for free (it no-ops if a job with that id is already
-                # queued/running) if the IG message id is used as _job_id.
-                await handle_inbound_message(pool, tenant_id, event.sender.id, event.message.text)
+                await _handle_event(session, pool, channel, event, entry.id)
         finally:
             reset_current_tenant(token)
 

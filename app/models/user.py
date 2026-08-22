@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, text
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,16 @@ from app.models.base import Base
 # Patients contacting a tenant's clinic over a channel (staff accounts live in Operator).
 class User(Base):
     __tablename__ = "users"
+    # One row per patient per channel. This is what makes first contact
+    # safe to handle concurrently: two webhook deliveries for a patient's
+    # first two bubbles both find no row and both insert, and the database
+    # — not a lucky interleaving — decides there is one patient. See
+    # app.services.conversation._get_or_create_user.
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "channel_id", "external_id", name="uq_users_tenant_channel_external"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")

@@ -4,7 +4,7 @@ r"""Create a Tenant + its Instagram Channel row in an otherwise-empty database
 Every other bootstrapping script (create_operator.py, set_channel_credentials.py)
 assumes a Tenant and Channel already exist — this is the one that creates them
 in the first place. credentials is seeded with an encrypted placeholder value
-("pending", recognized by app.services.instagram_client.is_placeholder_credential)
+("pending", recognized by app.channels.instagram.client.is_placeholder_credential)
 since the real access token isn't known yet; run set_channel_credentials.py
 afterward to fill it in.
 

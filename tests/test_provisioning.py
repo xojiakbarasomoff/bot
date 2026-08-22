@@ -52,7 +52,7 @@ async def test_creates_tenant_and_channel_with_token(db_session: AsyncSession) -
 
 async def test_without_token_seeds_a_placeholder(db_session: AsyncSession) -> None:
     """A channel seeded before the token is known must be distinguishable
-    from one carrying a real credential -- app.services.instagram_client
+    from one carrying a real credential -- app.channels.instagram.client
     skips sending on a placeholder instead of calling Meta with garbage.
     """
     await _provision(
