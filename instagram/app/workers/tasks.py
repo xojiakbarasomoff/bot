@@ -14,6 +14,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
 
+from arq import cron
 from arq.connections import RedisSettings
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,6 +38,7 @@ from app.services.conversation import (
 )
 from app.services.debounce import join_messages, pop_batch_if_current_generation
 from app.services.delivery import send_reply
+from app.services.reminders import send_due_reminders
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +197,30 @@ async def fire_debounce_window(
     )
 
 
+async def send_appointment_reminders(
+    ctx: dict[str, Any],
+    *,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] = db_session,
+    now: datetime | None = None,
+    adapter: ChannelAdapter | None = None,
+) -> None:
+    """Cron job: remind patients about appointments that are coming up.
+
+    Runs across every tenant — it has no request and no operator to take one
+    from — and app.services.reminders sets the tenant per appointment before
+    touching anything scoped. See that module for why a reminder is marked
+    sent only once it has actually gone out.
+    """
+    async with session_factory() as session:
+        run = await send_due_reminders(session, now=now, adapter=adapter)
+
+    if run.sent or run.failed or run.skipped:
+        logger.info(
+            "appointment_reminders_run",
+            extra={"sent": run.sent, "failed": run.failed, "skipped": run.skipped},
+        )
+
+
 # The worker is a separate process from the web app, so it needs its own
 # handler installed -- app.main's call never runs here.
 configure_logging()
@@ -202,4 +228,8 @@ configure_logging()
 
 class WorkerSettings:
     functions = [process_inbound_message, fire_debounce_window]
+    # Every five minutes. The reminder windows are hours wide and the job
+    # catches up on anything it missed, so this is about how promptly a
+    # reminder lands inside its window rather than about not losing one.
+    cron_jobs = [cron(send_appointment_reminders, minute=set(range(0, 60, 5)))]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

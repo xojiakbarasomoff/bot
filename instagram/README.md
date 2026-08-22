@@ -165,6 +165,15 @@ so it reaches whichever platform the patient wrote in on, routed by the
 context captured from their own last message — for a Telegram Business
 conversation, back over that same connection.
 
+### Reminders
+
+The worker runs a cron pass every five minutes that reminds patients a day
+before and two hours before their appointment, on whichever platform they
+booked through. A reminder is marked sent only once it has actually gone
+out, so one that could not be delivered is tried again rather than quietly
+written off; a booking made at short notice gets the urgent reminder only,
+not both at once.
+
 ### The Mini App
 
 `POST /api/webapp/{bot_id}/book` verifies Telegram's signature over the
