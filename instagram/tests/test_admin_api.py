@@ -30,7 +30,7 @@ from app.repositories.appointment import AppointmentRepository
 from app.repositories.doctor import DoctorRepository
 from app.repositories.lead import LeadRepository
 from app.repositories.operator import OperatorRepository
-from app.services.appointment import is_within_working_hours
+from app.services.appointment import CLINIC_TIMEZONE, is_within_working_hours
 from tests.conftest import Seed
 
 
@@ -568,3 +568,124 @@ async def test_analytics_counts_only_this_clinic(
     assert body["leads_total"] == 1
     assert body["leads_new"] == 1
     assert body["faqs_active"] == 1
+
+
+# --- account: password and export ---
+
+
+async def test_changing_your_own_password(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    from app.core.passwords import hash_password, verify_password
+
+    with as_tenant(seed.tenant_a.id):
+        operator = await OperatorRepository(db_session).create(
+            name="Operator A",
+            role="operator",
+            username=f"pw-{seed.tenant_a.id}",
+            password_hash=hash_password("current-password"),
+        )
+    csrf = _login_as(client, operator.id)
+
+    response = await client.post(
+        "/api/admin/password",
+        json={"current_password": "current-password", "new_password": "a-much-longer-one"},
+        headers={CSRF_HEADER: csrf},
+    )
+
+    assert response.status_code == 204
+    assert verify_password("a-much-longer-one", operator.password_hash)
+
+
+async def test_the_current_password_is_required_to_change_it(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """A session alone is not enough: this is what stops a borrowed, unlocked
+    browser from being turned into permanent access.
+    """
+    from app.core.passwords import hash_password
+
+    with as_tenant(seed.tenant_a.id):
+        operator = await OperatorRepository(db_session).create(
+            name="Operator A",
+            role="operator",
+            username=f"pw2-{seed.tenant_a.id}",
+            password_hash=hash_password("current-password"),
+        )
+    csrf = _login_as(client, operator.id)
+
+    response = await client.post(
+        "/api/admin/password",
+        json={"current_password": "wrong", "new_password": "a-much-longer-one"},
+        headers={CSRF_HEADER: csrf},
+    )
+
+    assert response.status_code == 400
+
+
+async def test_a_short_new_password_is_rejected(
+    client: httpx.AsyncClient, seed: Seed, manager: Any
+) -> None:
+    csrf = _login_as(client, manager.id)
+
+    response = await client.post(
+        "/api/admin/password",
+        json={"current_password": "x", "new_password": "short"},
+        headers={CSRF_HEADER: csrf},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_the_day_exports_as_csv(client: httpx.AsyncClient, seed: Seed, manager: Any) -> None:
+    csrf = _login_as(client, manager.id)
+    slot = _next_free_slot()
+    await client.post(
+        "/api/admin/appointments",
+        json={
+            "scheduled_at": slot.isoformat(),
+            "patient_name": "Aziza Karimova",
+            "patient_phone": "+998 90 123 45 67",
+        },
+        headers={CSRF_HEADER: csrf},
+    )
+
+    local_day = slot.astimezone(CLINIC_TIMEZONE).date().isoformat()
+    response = await client.get(f"/api/admin/export/appointments.csv?date={local_day}")
+
+    assert response.status_code == 200
+    assert "text/csv" in response.headers["content-type"]
+    assert "attachment" in response.headers["content-disposition"]
+    # A BOM, so Excel on Windows does not mangle every Uzbek name.
+    assert response.text.startswith("\ufeff")
+    assert "Aziza Karimova" in response.text
+    assert "+998 90 123 45 67" in response.text
+
+
+async def test_the_export_covers_only_this_clinic(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    seed: Seed,
+    manager: Any,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    slot = _next_free_slot(2)
+    with as_tenant(seed.tenant_b.id):
+        await AppointmentRepository(db_session).create(
+            doctor_name="Dr. B",
+            scheduled_at=slot,
+            status=AppointmentStatus.SCHEDULED,
+            patient_name="Boshqa klinikaning bemori",
+        )
+
+    _login_as(client, manager.id)
+    local_day = slot.astimezone(CLINIC_TIMEZONE).date().isoformat()
+    response = await client.get(f"/api/admin/export/appointments.csv?date={local_day}")
+
+    assert "Boshqa klinikaning bemori" not in response.text

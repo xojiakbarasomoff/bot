@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 # Imported for the side effect of registering the built-in channel adapters
 # (see app.channels), which app.services.delivery looks up by channel type.
@@ -44,6 +45,14 @@ app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(admin_router)
 app.include_router(webapp_router)
+
+# The operator dashboard, served from the same origin as the API it calls —
+# which is what lets it authenticate with the session cookie instead of
+# carrying a token in JavaScript where any script on the page could read it.
+# Mounted after the routers so it cannot shadow one.
+_ADMIN_UI = Path("app/static/admin")
+if _ADMIN_UI.is_dir():
+    app.mount("/admin", StaticFiles(directory=_ADMIN_UI, html=True), name="admin")
 
 
 @app.exception_handler(NotAuthenticatedError)

@@ -11,11 +11,10 @@ everything else is platform-neutral and shared. See
 [Architecture](#architecture).
 
 `../telegram/` still holds the original Telegram project. **Nothing there
-should be deployed any more** — its bot, admin API and Mini App all run
-through the code here now, against a schema its own models no longer match.
-What is left in it is the static dashboard front-end, which still has to be
-pointed at the API below; once that moves, the directory goes away and this
-one is renamed.
+should be deployed any more** — its bot, admin API, Mini App and dashboard
+all run through the code here now, against a schema its own models no longer
+match. It is kept only as a reference while the merge finishes; once it is
+removed, this directory is renamed.
 
 Everything below is relative to this directory — run `make`, `pytest`,
 `alembic` and `docker compose` from `instagram/`, not from the repository
@@ -159,6 +158,13 @@ account can read everything and change nothing.
 | Knowledge base | list, create (embeds it), delete (deactivates) |
 | Settings | get, patch (merges) |
 | Analytics | summary + bookings per day |
+| Account | change your own password, export the day as CSV |
+
+The dashboard itself is served at **`/admin`** from this same application,
+which is what lets it authenticate with the session cookie rather than
+carrying a token in JavaScript where any script on the page could read it.
+It has no build step and no CDN: one HTML file, so it keeps working on a
+clinic's patchy connection.
 
 An operator's reply goes out through the same delivery service the bot uses,
 so it reaches whichever platform the patient wrote in on, routed by the
