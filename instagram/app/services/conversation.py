@@ -16,9 +16,10 @@ the reply-window check had no real timestamp to measure against.
 """
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,6 +107,7 @@ async def register_inbound_message(
     channel_type: str,
     sender_external_id: str,
     text: str,
+    reply_context: Mapping[str, Any] | None = None,
 ) -> InboundContext:
     """Record one message from a patient and return the context to act on it.
 
@@ -118,6 +120,13 @@ async def register_inbound_message(
     Does not commit. The caller owns the transaction, so recording the
     message and whatever it decides to do next either both happen or
     neither does.
+
+    `reply_context` is the platform's own routing detail for answering this
+    message (see ChannelAdapter.send_text). It is stored on the message
+    rather than only passed to the queue so that an operator replying from
+    the dashboard hours later can route their reply the same way the bot
+    would have — for a Telegram Business conversation, over the same
+    business connection.
     """
     user = await _get_or_create_user(session, channel_id=channel_id, external_id=sender_external_id)
     conversation = await _get_or_create_open_conversation(session, user_id=user.id)
@@ -126,6 +135,7 @@ async def register_inbound_message(
         sender=MessageSender.PATIENT,
         content=text,
         channel=channel_type,
+        meta=dict(reply_context) if reply_context else {},
     )
     return InboundContext(
         conversation_id=conversation.id,
@@ -208,3 +218,20 @@ async def context_for_reply(
     while turns and turns[-1]["role"] == "user":
         turns.pop()
     return turns
+
+
+async def reply_context_for(
+    session: AsyncSession, conversation_id: uuid.UUID
+) -> dict[str, Any] | None:
+    """How to route a reply into this conversation, as captured from the
+    patient's most recent message.
+
+    What an operator's dashboard reply needs: the bot's own reply carries
+    the context straight through the queue, but a human answering later has
+    only the conversation to go on.
+    """
+    messages = await MessageRepository(session).list_recent(conversation_id, 20)
+    for message in reversed(messages):
+        if message.sender == MessageSender.PATIENT and message.meta:
+            return dict(message.meta)
+    return None

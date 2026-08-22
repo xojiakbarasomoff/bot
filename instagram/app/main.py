@@ -9,9 +9,11 @@ from fastapi.responses import FileResponse, RedirectResponse
 # (see app.channels), which app.services.delivery looks up by channel type.
 from app import channels  # noqa: F401  - importing it registers the adapters
 from app.api import (
+    admin_router,
     auth_router,
     dashboard_router,
     telegram_webhook_router,
+    webapp_router,
     webhook_router,
 )
 from app.api.auth import NotAuthenticatedError
@@ -40,6 +42,8 @@ app.include_router(webhook_router)
 app.include_router(telegram_webhook_router)
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(admin_router)
+app.include_router(webapp_router)
 
 
 @app.exception_handler(NotAuthenticatedError)

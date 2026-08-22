@@ -10,10 +10,12 @@ Everything a platform knows about itself lives under `app/channels/`;
 everything else is platform-neutral and shared. See
 [Architecture](#architecture).
 
-`../telegram/` still holds the original Telegram project. Its bot now runs
-through the code here; what remains to port from it is the admin dashboard
-and the Telegram Mini App, after which that directory goes away and this one
-is renamed.
+`../telegram/` still holds the original Telegram project. **Nothing there
+should be deployed any more** — its bot, admin API and Mini App all run
+through the code here now, against a schema its own models no longer match.
+What is left in it is the static dashboard front-end, which still has to be
+pointed at the API below; once that moves, the directory goes away and this
+one is renamed.
 
 Everything below is relative to this directory — run `make`, `pytest`,
 `alembic` and `docker compose` from `instagram/`, not from the repository
@@ -128,6 +130,48 @@ make lint
 make format
 make typecheck
 ```
+
+## The dashboard API
+
+`/api/admin/*` is the JSON API the operator dashboard runs on, and
+`/api/webapp/{bot_id}/book` is what the Telegram Mini App posts to. Both were
+ported from the Telegram project; both had a hole that is closed here.
+
+**Which clinic you are is never a request parameter.** Admin endpoints take
+the tenant from the logged-in operator's own row, and every query filters on
+it. The endpoints these replace took `tenant_id: int = Query(1)`, so any
+authenticated operator could read and modify another clinic's patients,
+appointments and conversations by changing a number in the URL.
+
+Authentication is the session cookie the dashboard already used — signed,
+`HttpOnly`, rate-limited at login. A client starts by calling
+`GET /api/admin/session`, which returns who it is logged in as and a CSRF
+token; every write echoes that token back in `X-CSRF-Token`. A `doctor`
+account can read everything and change nothing.
+
+| Area | Endpoints |
+| --- | --- |
+| Session | `GET /api/admin/session` |
+| Conversations | list, detail, `POST .../bot` (take over / hand back), `POST .../reply` |
+| Appointments | list by day, create, cancel, confirm |
+| Doctors | list, create, patch |
+| Leads | list, create, patch |
+| Knowledge base | list, create (embeds it), delete (deactivates) |
+| Settings | get, patch (merges) |
+| Analytics | summary + bookings per day |
+
+An operator's reply goes out through the same delivery service the bot uses,
+so it reaches whichever platform the patient wrote in on, routed by the
+context captured from their own last message — for a Telegram Business
+conversation, back over that same connection.
+
+### The Mini App
+
+`POST /api/webapp/{bot_id}/book` verifies Telegram's signature over the
+`initData` string before writing anything, and takes both the clinic and the
+patient from it. The endpoint it replaces verified nothing at all: anyone who
+found the URL could create appointments in any clinic's calendar, attributed
+to any patient they named.
 
 ## Architecture
 

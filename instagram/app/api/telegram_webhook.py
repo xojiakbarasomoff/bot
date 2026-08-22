@@ -235,12 +235,19 @@ async def _handle_update(
         },
     )
 
+    reply_context = (
+        {BUSINESS_CONNECTION_ID: message.business_connection_id}
+        if message.business_connection_id
+        else None
+    )
+
     inbound = await register_inbound_message(
         session,
         channel_id=channel.channel_id,
         channel_type=channel.channel_type,
         sender_external_id=sender_external_id,
         text=message.text,
+        reply_context=reply_context,
     )
     await session.commit()
 
@@ -250,12 +257,6 @@ async def _handle_update(
             extra={"conversation_id": str(inbound.conversation_id)},
         )
         return
-
-    reply_context = (
-        {BUSINESS_CONNECTION_ID: message.business_connection_id}
-        if message.business_connection_id
-        else None
-    )
 
     await handle_inbound_message(
         pool,

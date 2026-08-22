@@ -1,3 +1,10 @@
+# Pinned so the stack keeps its identity no matter which directory it is
+# started from. Compose otherwise derives the project name from the folder,
+# which names the volumes too — so moving this project into instagram/ (and
+# renaming it again when the merge finishes) would silently point Postgres at
+# a brand-new, empty volume while the old one sat there holding the data.
+name: dental-assistant
+
 services:
   api:
     build: .
