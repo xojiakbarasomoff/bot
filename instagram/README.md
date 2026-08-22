@@ -1,23 +1,19 @@
-# Dental Clinic Assistant — Instagram channel
+# Dental Clinic Assistant
 
 A multi-tenant SaaS AI assistant that talks to patients on behalf of dental
 clinics, handling conversations, scheduling context, and retrieval-augmented
 answers grounded in each clinic's own data.
 
-This directory serves the **Instagram** channel. It is one half of a single
-product: `../telegram/` holds the Telegram bot, and the two are intended to
-become one deployment with one shared core. The code here is laid out for
-that merge — see [Architecture](#architecture) below. In short: everything a
-platform knows about itself lives under `app/channels/`, and everything else
-(the answer pipeline, the conversation store, the database) is
-platform-neutral and meant to be reached by both bots without a second copy.
+This is the merged application. It serves **Instagram and Telegram** from
+one codebase: one answer pipeline, one conversation store, one database.
+Everything a platform knows about itself lives under `app/channels/`;
+everything else is platform-neutral and shared. See
+[Architecture](#architecture).
 
-**Merge in progress.** As of the unified-schema migration
-(`b93c5e17a204`), the database schema here is the *shared* one — it already
-carries the tables and columns the Telegram bot needs (`doctors`, `leads`,
-the merged `appointments` shape). The Telegram adapter and its admin panel
-land in the next phases, after which this directory becomes the single
-application and is renamed. See the merge plan for the phasing.
+`../telegram/` still holds the original Telegram project. Its bot now runs
+through the code here; what remains to port from it is the admin dashboard
+and the Telegram Mini App, after which that directory goes away and this one
+is renamed.
 
 Everything below is relative to this directory — run `make`, `pytest`,
 `alembic` and `docker compose` from `instagram/`, not from the repository
@@ -83,6 +79,42 @@ Tear the stack down:
 make down
 ```
 
+## Connecting a channel
+
+A channel is a clinic's account on one platform. Its credentials live
+encrypted in the database, never in the environment — one deployment serves
+many clinics, so a single `BOT_TOKEN` variable could only ever be right for
+one of them.
+
+### Telegram
+
+From this directory, with the bot token from @BotFather:
+
+```powershell
+$env:TELEGRAM_BOT_TOKEN = "<token from @BotFather>"
+$env:PUBLIC_BASE_URL = "https://your-deployment.example.com"
+$env:TENANT_NAME = "Smile Dental"
+./../.venv/Scripts/python.exe scripts/setup_telegram_channel.py
+Remove-Item Env:\TELEGRAM_BOT_TOKEN
+```
+
+That checks the token with `getMe`, creates the tenant and channel, and
+registers the webhook at `/webhook/telegram/<bot id>` with a generated
+secret. Re-running refreshes all three rather than duplicating anything.
+
+The secret is what proves a delivery came from Telegram. It is stored in
+`Channel.config` and verified on every update — a channel without one
+**refuses every delivery**, deliberately: an endpoint that accepts
+unauthenticated updates lets anyone write into a clinic's patient
+transcript.
+
+### Instagram
+
+`scripts/bootstrap_tenant.py` creates the tenant and channel;
+`scripts/set_channel_credentials.py` stores the access token once Meta
+issues it. Meta's webhook is configured in the app dashboard, pointing at
+`/webhook` and verified with `WEBHOOK_VERIFY_TOKEN` / `META_APP_SECRET`.
+
 ## Running tests
 
 ```bash
@@ -125,7 +157,8 @@ tests/              # pytest test suite
 ### The inbound path
 
 ```
-Instagram webhook  (app/api/webhook.py)      <- platform-specific
+Instagram webhook   (app/api/webhook.py)          <- platform-specific
+Telegram  webhook   (app/api/telegram_webhook.py)  <- platform-specific
         |   verify signature, parse payload, resolve channel
         v
 idempotency.claim_event                      <- shared: drop redeliveries
@@ -148,10 +181,15 @@ workers.tasks.process_inbound_message        <- shared: the ARQ job
 ```
 
 Everything between the two platform-specific ends is written against a
-channel id and a platform-issued user id, never against anything Instagram-
-shaped. Adding Telegram means writing a `ChannelAdapter` and an inbound route
-that calls the same shared services — not a second answer pipeline, a second
-debounce, or a second conversation store.
+channel id and a platform-issued user id, never against anything one
+platform shaped. Both channels run this exact path; a third would too.
+
+One thing does cross it: `reply_context`, an opaque mapping the inbound edge
+captures and the adapter reads back, carried through the queue untouched by
+everything in between. It exists because some platforms route a reply by
+more than the recipient's id — a Telegram conversation reached through
+Telegram Business must be answered over that same business connection, or
+the reply goes out from the bot account instead of the clinic's own.
 
 ### Adding a channel
 

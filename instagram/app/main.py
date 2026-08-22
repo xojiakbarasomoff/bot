@@ -8,7 +8,12 @@ from fastapi.responses import FileResponse, RedirectResponse
 # Imported for the side effect of registering the built-in channel adapters
 # (see app.channels), which app.services.delivery looks up by channel type.
 from app import channels  # noqa: F401  - importing it registers the adapters
-from app.api import auth_router, dashboard_router, webhook_router
+from app.api import (
+    auth_router,
+    dashboard_router,
+    telegram_webhook_router,
+    webhook_router,
+)
 from app.api.auth import NotAuthenticatedError
 from app.core.config import get_settings
 from app.core.faq_seeding import seed_faqs_if_configured
@@ -30,8 +35,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Dental Clinic Instagram Assistant", lifespan=lifespan)
+app = FastAPI(title="Dental Clinic Assistant", lifespan=lifespan)
 app.include_router(webhook_router)
+app.include_router(telegram_webhook_router)
 app.include_router(auth_router)
 app.include_router(dashboard_router)
 

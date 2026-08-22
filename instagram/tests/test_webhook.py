@@ -319,10 +319,12 @@ async def test_receive_webhook_processes_genuine_inbound_message(
     info = await job.info()
     assert info is not None
     assert info.function == FIRE_DEBOUNCE_WINDOW_JOB
-    tenant_id, channel_id, conversation_id, sender, generation = info.args
+    tenant_id, channel_id, conversation_id, sender, generation, reply_context = info.args
     assert tenant_id == str(seed.tenant_a.id)
     assert channel_id == str(seed.a.channel.id)
     assert (sender, generation) == ("user-1", 1)
+    # Instagram routes a reply by the recipient's id alone.
+    assert reply_context is None
     assert uuid.UUID(conversation_id)
 
 

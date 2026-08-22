@@ -14,9 +14,10 @@ an implementation directly.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
-from typing import ClassVar
+from typing import Any, ClassVar
 
 
 class ChannelType(StrEnum):
@@ -69,13 +70,30 @@ class ChannelAdapter(ABC):
     channel_type: ClassVar[ChannelType]
 
     @abstractmethod
-    async def send_text(self, *, credentials: str, recipient_external_id: str, text: str) -> None:
+    async def send_text(
+        self,
+        *,
+        credentials: str,
+        recipient_external_id: str,
+        text: str,
+        reply_context: Mapping[str, Any] | None = None,
+    ) -> None:
         """Deliver `text` to recipient_external_id on this platform.
 
         `credentials` is the decrypted value from Channel.credentials, and
         `recipient_external_id` the platform's own id for the patient (an
         Instagram-scoped user id, a Telegram chat id). Raises on any
         transport or API failure, so the caller's job fails and is retried.
+
+        `reply_context` is whatever the inbound edge captured that this
+        platform needs in order to answer in the right place, carried
+        through the queue untouched by everything in between. It exists
+        because some platforms route a reply by more than the recipient's
+        id: a Telegram conversation reached through Telegram Business must
+        be answered over that same business connection, or the reply goes
+        out from the bot account instead of the clinic's own. Opaque to the
+        shared services, and ignored by adapters that need nothing beyond
+        the recipient.
         """
 
     def delivery_block_reason(

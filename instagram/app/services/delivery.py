@@ -17,7 +17,9 @@ identity is now carried through the queue instead of being discarded.
 
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +37,7 @@ async def send_reply(
     recipient_external_id: str,
     text: str,
     last_user_message_at: datetime,
+    reply_context: Mapping[str, Any] | None = None,
     adapter: ChannelAdapter | None = None,
 ) -> str | None:
     """Deliver `text` to the patient.
@@ -52,6 +55,11 @@ async def send_reply(
     deliberately NOT one of those: it is a misconfiguration, not "no token
     yet", so it propagates and fails the job loudly. So does any transport
     failure from the adapter — the job should be retried in that case.
+
+    `reply_context` is passed to the adapter untouched. Nothing here reads
+    it: what a platform needs in order to answer in the right place is the
+    adapter's business, and inspecting it would put platform knowledge back
+    into the shared layer this module exists to keep free of it.
     """
     channel = await ChannelRepository(session).get(channel_id)
     if channel is None or not channel.is_active:
@@ -84,7 +92,10 @@ async def send_reply(
         return None
 
     await resolved_adapter.send_text(
-        credentials=credentials, recipient_external_id=recipient_external_id, text=text
+        credentials=credentials,
+        recipient_external_id=recipient_external_id,
+        text=text,
+        reply_context=reply_context,
     )
     logger.info(
         "reply_sent",

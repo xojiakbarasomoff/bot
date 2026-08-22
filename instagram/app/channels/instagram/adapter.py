@@ -7,8 +7,10 @@ app.workers.tasks, where they were reached only by the Instagram path and
 would have had to be duplicated (with different constants) for Telegram.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
+from typing import Any
 
 from app.channels.base import ChannelAdapter, ChannelType, DeliveryBlocked
 from app.channels.instagram.client import (
@@ -32,7 +34,17 @@ class InstagramAdapter(ChannelAdapter):
     def _resolve_client(self) -> InstagramClient:
         return self._client or get_instagram_client()
 
-    async def send_text(self, *, credentials: str, recipient_external_id: str, text: str) -> None:
+    async def send_text(
+        self,
+        *,
+        credentials: str,
+        recipient_external_id: str,
+        text: str,
+        # Instagram routes a reply by the recipient's id alone, so there is
+        # nothing here to carry. Accepted so the adapter satisfies the
+        # shared contract.
+        reply_context: Mapping[str, Any] | None = None,
+    ) -> None:
         await self._resolve_client().send_text(
             access_token=credentials, recipient_igsid=recipient_external_id, text=text
         )

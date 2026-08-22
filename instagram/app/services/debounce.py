@@ -1,8 +1,8 @@
 import logging
 import uuid
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from arq.connections import ArqRedis
 
@@ -118,6 +118,7 @@ async def handle_inbound_message(
     conversation_id: uuid.UUID,
     sender_external_id: str,
     message_text: str,
+    reply_context: Mapping[str, Any] | None = None,
     window_seconds: int | None = None,
     guardrail_classifier: GuardrailClassifier | None = None,
 ) -> None:
@@ -140,6 +141,11 @@ async def handle_inbound_message(
     Platform-neutral: the ids it carries are a channel and whatever id that
     channel's platform issued for the patient, so the Telegram bot reaches
     this same buffering behaviour without a second copy of it.
+
+    `reply_context` is the platform's own routing detail for the eventual
+    reply (see ChannelAdapter.send_text). It rides along on the enqueued job
+    and is never read here — this module batches text, it does not know how
+    any platform delivers.
     """
     messages_key = _messages_key(tenant_id, channel_id, sender_external_id)
     generation_key = _generation_key(tenant_id, channel_id, sender_external_id)
@@ -168,6 +174,7 @@ async def handle_inbound_message(
             str(conversation_id),
             sender_external_id,
             combined_text,
+            dict(reply_context) if reply_context is not None else None,
         )
         if not await _try_clear_buffer(pool, messages_key, generation_key, len(pending)):
             logger.debug("debounce_emergency_buffer_clear_skipped_due_to_race")
@@ -182,5 +189,6 @@ async def handle_inbound_message(
         str(conversation_id),
         sender_external_id,
         generation,
+        dict(reply_context) if reply_context is not None else None,
         _defer_by=window,
     )

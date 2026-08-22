@@ -5,9 +5,10 @@ tested for the contract rather than for Instagram's behaviour specifically —
 that lives in test_instagram_client.py and the worker tests.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -31,17 +32,28 @@ from tests.conftest import Seed
 
 class RecordingAdapter(ChannelAdapter):
     """A stand-in platform, used to prove the dispatch is by channel type
-    and not hardcoded to Instagram.
+    and not hardcoded to either real one.
+
+    Registered as Telegram in the tests below because the registry is keyed
+    by ChannelType and there is no third member to borrow; each of those
+    tests copies the registry first so the real adapter is put back.
     """
 
     channel_type = ChannelType.TELEGRAM
 
     def __init__(self, blocked: DeliveryBlocked | None = None) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, Any]] = []
         self._blocked = blocked
 
-    async def send_text(self, *, credentials: str, recipient_external_id: str, text: str) -> None:
-        self.calls.append((credentials, recipient_external_id, text))
+    async def send_text(
+        self,
+        *,
+        credentials: str,
+        recipient_external_id: str,
+        text: str,
+        reply_context: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.calls.append((credentials, recipient_external_id, text, reply_context))
 
     def delivery_block_reason(
         self, *, credentials: str, last_user_message_at: datetime
@@ -64,12 +76,13 @@ def test_unknown_channel_type_raises_rather_than_dropping_the_reply() -> None:
         get_adapter("carrier-pigeon")
 
 
-def test_a_registered_channel_type_with_no_adapter_also_raises() -> None:
-    """ChannelType.TELEGRAM is part of the contract but has no adapter in
-    this repository yet — it must fail as loudly as an unknown string.
+def test_every_declared_channel_type_has_an_adapter() -> None:
+    """ChannelType is the contract between a database column, an adapter
+    registration and a Redis key namespace. A member with no adapter would
+    be a channel row whose replies silently go nowhere.
     """
-    with pytest.raises(UnknownChannelTypeError):
-        get_adapter(ChannelType.TELEGRAM)
+    for channel_type in ChannelType:
+        assert get_adapter(channel_type) is not None
 
 
 def test_registering_an_adapter_makes_it_findable(
@@ -130,7 +143,7 @@ async def test_send_reply_dispatches_on_the_channels_type(
         )
 
     assert delivered_over == "telegram"
-    assert adapter.calls == [("tg-bot-token", "chat-42", "Assalom alaykum")]
+    assert adapter.calls == [("tg-bot-token", "chat-42", "Assalom alaykum", None)]
 
 
 async def test_send_reply_returns_none_when_the_platform_blocks_it(

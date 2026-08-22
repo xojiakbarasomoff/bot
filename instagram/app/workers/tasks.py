@@ -9,7 +9,7 @@ The Telegram bot's inbound edge enqueues these same two jobs.
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
@@ -48,6 +48,7 @@ async def process_inbound_message(
     conversation_id: str,
     sender_external_id: str,
     message_text: str,
+    reply_context: Mapping[str, Any] | None = None,
     *,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] = db_session,
     embedding_provider: EmbeddingProvider | None = None,
@@ -125,6 +126,7 @@ async def process_inbound_message(
                 recipient_external_id=sender_external_id,
                 text=reply,
                 last_user_message_at=patient_last_wrote or datetime.now(UTC),
+                reply_context=reply_context,
                 adapter=adapter,
             )
 
@@ -150,6 +152,7 @@ async def fire_debounce_window(
     conversation_id: str,
     sender_external_id: str,
     generation: int,
+    reply_context: Mapping[str, Any] | None = None,
     *,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] = db_session,
     embedding_provider: EmbeddingProvider | None = None,
@@ -184,6 +187,7 @@ async def fire_debounce_window(
         conversation_id,
         sender_external_id,
         join_messages(messages),
+        reply_context,
         session_factory=session_factory,
         embedding_provider=embedding_provider,
         llm_provider=llm_provider,

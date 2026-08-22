@@ -70,7 +70,9 @@ async def test_handle_inbound_message_buffers_and_schedules_deferred_job(
     info = await job.info()
     assert info is not None
     assert info.function == FIRE_DEBOUNCE_WINDOW_JOB
-    assert info.args == (str(tenant_id), str(channel_id), str(conversation_id), SENDER, 1)
+    # The trailing None is the platform's reply context (see
+    # ChannelAdapter.send_text) — nothing to route by on this channel.
+    assert info.args == (str(tenant_id), str(channel_id), str(conversation_id), SENDER, 1, None)
 
 
 async def test_second_message_resets_timer_via_generation_counter(redis_pool: ArqRedis) -> None:
@@ -237,6 +239,7 @@ async def test_handle_inbound_message_emergency_enqueues_immediately_not_deferre
         str(conversation_id),
         SENDER,
         text,
+        None,
     )
 
     # Buffer cleared (best-effort clear succeeded — nothing raced with it
