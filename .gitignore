@@ -1,12 +1,11 @@
-# Byte-compiled / cache
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
+# Repository-root ignores.
+#
+# Each project keeps its own .gitignore (instagram/.gitignore,
+# telegram/.gitignore) — a .gitignore only covers the tree it sits in, so
+# once both projects moved into subdirectories nothing was left guarding the
+# root itself. This file covers what gets created *here*: a virtualenv or an
+# env file made by someone working from the repository root rather than from
+# inside one of the projects.
 
 # Virtual environments
 .venv/
@@ -15,16 +14,19 @@ env/
 
 # Environment variables
 .env
-.env.docker
+.env.*
+!.env*.example
 
-# Testing / coverage
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Tooling caches
 .pytest_cache/
-.coverage
-htmlcov/
-
-# mypy / ruff caches
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # IDE
 .vscode/
@@ -33,6 +35,3 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
-
-# Stray output from `railway config pull` when the TypeScript SDK is absent.
-.railway-config-pull-*/

@@ -1,14 +1,33 @@
-name: CI
+# Kept at the repository root, not moved under instagram/ with the rest of
+# the project: GitHub only reads workflows from .github/workflows at the
+# root, so a copy inside instagram/ would never run and the gate would go
+# quiet without anything failing to say so. Every `run` step is executed
+# from instagram/ instead (see defaults below).
+#
+# The path filter keeps this from running on commits that only touch the
+# Telegram half of the repository -- this workflow neither builds nor tests
+# that code, so a red X on it would be noise.
+name: Instagram CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, second]
+    paths:
+      - "instagram/**"
+      - ".github/workflows/ci.yml"
   pull_request:
-    branches: [main]
+    branches: [main, second]
+    paths:
+      - "instagram/**"
+      - ".github/workflows/ci.yml"
 
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: instagram
 
     services:
       postgres:
@@ -54,6 +73,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # defaults.run.working-directory does not apply to `uses` steps,
+          # so the cache key has to name the manifest explicitly or it is
+          # looked for at the root, where it no longer is.
+          cache-dependency-path: instagram/pyproject.toml
 
       # Generated per run rather than written into this file. A Fernet key
       # committed to the repository is a real key in public history even

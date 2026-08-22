@@ -4,14 +4,20 @@ A multi-tenant SaaS AI assistant that talks to patients on behalf of dental
 clinics, handling conversations, scheduling context, and retrieval-augmented
 answers grounded in each clinic's own data.
 
-This repository serves the **Instagram** channel. It is one half of a single
-product: a Telegram bot is being prepared on its own branch, and the two are
-intended to become one deployment with one shared core. The code here is laid
-out for that merge — see [Architecture](#architecture) below. In short:
-everything a platform knows about itself lives under `app/channels/`, and
-everything else (the answer pipeline, the conversation store, the database)
-is platform-neutral and meant to be reached by both bots without a second
-copy.
+This directory serves the **Instagram** channel. It is one half of a single
+product: `../telegram/` holds the Telegram bot, and the two are intended to
+become one deployment with one shared core. The code here is laid out for
+that merge — see [Architecture](#architecture) below. In short: everything a
+platform knows about itself lives under `app/channels/`, and everything else
+(the answer pipeline, the conversation store, the database) is
+platform-neutral and meant to be reached by both bots without a second copy.
+
+Everything below is relative to this directory — run `make`, `pytest`,
+`alembic` and `docker compose` from `instagram/`, not from the repository
+root. The one piece deliberately left at the root is
+`.github/workflows/ci.yml`: GitHub reads workflows from there and nowhere
+else, so it stays put and runs every step with
+`working-directory: instagram`.
 
 ## Prerequisites
 
