@@ -80,12 +80,29 @@ Tear the stack down:
 make down
 ```
 
+## Deploying
+
+See **[docs/DEPLOY.md](docs/DEPLOY.md)** for the full Railway walkthrough:
+four services, the variables each one needs, and what every provisioning log
+line means when a step does not do what you expected.
+
+The short version: `scripts/generate_secrets.py` writes a ready-to-paste
+variable block, and the app provisions its own tenant, channels and first
+dashboard login on startup from those variables. That is not convenience —
+on a managed host the database is reachable only from inside the cluster's
+private network, so no script run from your machine can write the first rows.
+
 ## Connecting a channel
 
 A channel is a clinic's account on one platform. Its credentials live
 encrypted in the database, never in the environment — one deployment serves
 many clinics, so a single `BOT_TOKEN` variable could only ever be right for
 one of them.
+
+The scripts below are the right tool wherever you have a shell onto the
+database. Where you do not — Railway, Fly, most managed hosts — set
+`PROVISION_TELEGRAM_BOT_TOKEN` / `PROVISION_IG_ACCOUNT_ID` instead and let
+startup do the same work; see `app/core/provisioning.py`.
 
 ### Telegram
 

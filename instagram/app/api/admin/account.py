@@ -11,17 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.admin.deps import verify_csrf_header
 from app.api.auth import get_current_operator
 from app.core.db import get_db_session
-from app.core.passwords import hash_password, verify_password
+from app.core.passwords import MIN_PASSWORD_LENGTH, hash_password, verify_password
 from app.models.operator import Operator
 from app.repositories.appointment import AppointmentRepository
 from app.services.appointment import CLINIC_TIMEZONE
 
 router = APIRouter(prefix="/api/admin", tags=["Admin — Account"])
-
-# Long enough that a guess is not worth attempting against the login
-# rate-limiter. The Telegram admin API this replaces accepted four
-# characters.
-MIN_PASSWORD_LENGTH = 10
 
 
 class PasswordChange(BaseModel):

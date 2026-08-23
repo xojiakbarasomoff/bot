@@ -13,9 +13,13 @@ dist/
 venv/
 env/
 
-# Environment variables
+# Environment variables. Deny every .env* and re-admit only the committed
+# examples, rather than listing the real ones by name -- the next one
+# somebody adds (.env.railway, .env.staging) must not have to be
+# remembered here to stay out of a commit.
 .env
-.env.docker
+.env.*
+!.env*.example
 
 # Testing / coverage
 .pytest_cache/

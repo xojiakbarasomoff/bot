@@ -116,6 +116,43 @@ class Settings(BaseSettings):
     provision_tenant_name: str | None = Field(default=None, alias="PROVISION_TENANT_NAME")
     provision_ig_account_id: str | None = Field(default=None, alias="PROVISION_IG_ACCOUNT_ID")
 
+    # This deployment's own public origin, e.g.
+    # "https://clinic-bot.up.railway.app". Used only to tell Telegram where
+    # to deliver updates; the app never calls itself. On a managed host it is
+    # the one fact the container cannot work out for itself -- the hostname
+    # inside the cluster is not the one the outside world reaches it by.
+    public_base_url: str | None = Field(default=None, alias="PUBLIC_BASE_URL")
+
+    # The clinic's Telegram bot token (@BotFather). Read only by first-run
+    # provisioning, exactly like access_token above: once the channel row
+    # exists the running pipeline reads the token from it, encrypted, and
+    # never from configuration. Requires public_base_url, since registering
+    # the webhook is half of what makes the bot reachable.
+    provision_telegram_bot_token: str | None = Field(
+        default=None, alias="PROVISION_TELEGRAM_BOT_TOKEN"
+    )
+
+    # The first dashboard login. There is no sign-up page and no admin UI for
+    # creating accounts, so without this a deployment on a host whose
+    # database is only reachable from inside the cluster has no way in at
+    # all -- scripts/create_operator.py needs a shell that host does not
+    # offer. Same posture as the values above: an instruction to provision,
+    # removable once the row exists. The password is only ever used to
+    # compute a bcrypt hash; it is never stored or logged.
+    provision_operator_username: str | None = Field(
+        default=None, alias="PROVISION_OPERATOR_USERNAME"
+    )
+    provision_operator_password: str | None = Field(
+        default=None, alias="PROVISION_OPERATOR_PASSWORD"
+    )
+    provision_operator_name: str = Field(default="Administrator", alias="PROVISION_OPERATOR_NAME")
+    # "operator" (view + book/cancel) rather than "doctor" (view-only): the
+    # first account has to be able to actually run the clinic's day, and it
+    # is the only account that exists until it creates others.
+    provision_operator_role: Literal["doctor", "operator"] = Field(
+        default="operator", alias="PROVISION_OPERATOR_ROLE"
+    )
+
     # Path to a FAQ JSON file to load into knowledge_base on web startup (see
     # app.core.faq_seeding). Like the provisioning values above, it is an
     # instruction to seed rather than a description of the running system --
@@ -133,13 +170,17 @@ class Settings(BaseSettings):
         "clinic_phone_numbers",
         "clinic_address",
         "seed_faqs_from",
+        "public_base_url",
+        "provision_telegram_bot_token",
+        "provision_operator_username",
+        "provision_operator_password",
         mode="after",
     )
     @classmethod
     def _strip_pasted_values(cls, value: str | None) -> str | None:
-        """These five are the ones an operator pastes into a hosting
-        dashboard, where a trailing newline rides along invisibly and is then
-        stored verbatim.
+        """These are the ones an operator pastes into a hosting dashboard,
+        where a trailing newline rides along invisibly and is then stored
+        verbatim.
 
         For the provisioning ids that is silent and total: the newline lands
         in Channel.external_id, resolve_instagram_channel can never match
@@ -148,6 +189,12 @@ class Settings(BaseSettings):
         clinic_phone_numbers and clinic_address it is merely visible -- the
         assistant reads the value back to a patient with a line break in the
         middle of it.
+
+        The bot token and the bootstrap password are stripped for the same
+        reason and are the two worth naming: a stray newline makes getMe
+        return Unauthorized, and makes the one password that can log in
+        differ from the one its owner typed -- both of which read as "the
+        credential is wrong" rather than "the paste picked up a newline".
         """
         return value.strip() if value is not None else None
 
