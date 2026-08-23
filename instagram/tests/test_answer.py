@@ -11,7 +11,7 @@ from app.rag.llm import ChatMessage, LLMProvider
 from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.services.answer import NO_MATCH_RESPONSE, generate_answer
 from app.services.guardrail import EMERGENCY_RESPONSE
-from tests.conftest import Seed
+from tests.conftest import Seed, isolated_settings
 
 # A fixed, non-zero direction. Distance to itself is 0.0, well inside the
 # default 0.3 threshold, so any FAQ seeded with this embedding is a
@@ -103,15 +103,7 @@ async def test_generate_answer_returns_fixed_response_when_no_faq_matches(
 
 
 def _settings(**overrides: object) -> Settings:
-    base = {
-        "database_url": "postgresql+asyncpg://test:test@localhost/test",
-        "redis_url": "redis://localhost:6379/0",
-        "webhook_verify_token": "test-verify-token",
-        "meta_app_secret": "test-app-secret",
-        "encryption_key": "Hq3_REB-V0twf7iBgCPCSUZQiG44egxyiZg9kOKRxUg=",
-        "gemini_api_key": "test-gemini-key",
-    }
-    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+    return isolated_settings(**overrides)
 
 
 async def test_no_faq_match_asks_the_llm_when_answering_without_faq_is_enabled(

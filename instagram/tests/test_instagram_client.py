@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -89,3 +90,48 @@ async def test_send_text_raises_on_error_response_without_leaking_body() -> None
 
     with pytest.raises(InstagramSendError):
         await client.send_text(access_token="bad-token", recipient_igsid="sender-1", text="Hi!")
+
+
+async def test_send_failure_logs_the_subcode_that_says_what_went_wrong(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Meta answers "no such user", "outside the 24-hour messaging window"
+    and "this app may not message this account" all with code 100. Without
+    the subcode an operator reading the log cannot tell which of those
+    happened, and the three have completely different fixes.
+
+    The values here are a real response: subcode 2534014 is what the live
+    Graph API returns for a recipient id it cannot resolve.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Не удается найти запрошенного пользователя.",
+                    "type": "IGApiException",
+                    "code": 100,
+                    "error_subcode": 2534014,
+                    "fbtrace_id": "A0U1DBpPiP12byVCL0NKiF2",
+                }
+            },
+        )
+
+    client = GraphAPIInstagramClient()
+    client._http = httpx.AsyncClient(
+        base_url=client._http.base_url, transport=httpx.MockTransport(handler)
+    )
+
+    with caplog.at_level(logging.ERROR, logger="app"), pytest.raises(InstagramSendError):
+        await client.send_text(
+            access_token="a-real-looking-token", recipient_igsid="9900112233445566", text="Hi!"
+        )
+
+    record = next(r for r in caplog.records if r.message == "instagram_send_failed")
+    assert record.error_code == 100
+    assert record.error_subcode == 2534014
+    # Still no body, and above all no token: Meta's error payloads can echo
+    # request params back in the copy.
+    assert "a-real-looking-token" not in caplog.text
+    assert "fbtrace_id" not in caplog.text

@@ -92,17 +92,28 @@ class GraphAPIInstagramClient(InstagramClient):
         )
         if response.is_error:
             error_code: object = None
+            error_subcode: object = None
             with suppress(ValueError):
-                error_code = response.json().get("error", {}).get("code")
+                error = response.json().get("error", {})
+                error_code = error.get("code")
+                # The subcode is the half that says what actually happened.
+                # Meta answers "no such user", "outside the 24-hour messaging
+                # window" and "this app cannot message this account" all with
+                # code 100, so the code alone cannot tell an operator whether
+                # to fix the token, the app's permissions, or nothing at all.
+                # Taken as a scalar rather than by logging the payload,
+                # because an integer cannot carry a credential.
+                error_subcode = error.get("error_subcode")
             # Response body withheld from the log: Meta's error payloads can
             # echo request params (including access_token) back in the copy.
-            # Status + error code is enough to act on.
+            # Status + error code + subcode is enough to act on.
             logger.error(
                 "instagram_send_failed",
                 extra={
                     "recipient_igsid": recipient_igsid,
                     "status_code": response.status_code,
                     "error_code": error_code,
+                    "error_subcode": error_subcode,
                 },
             )
             raise InstagramSendError(f"Instagram send failed with status {response.status_code}")

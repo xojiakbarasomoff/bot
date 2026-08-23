@@ -22,20 +22,13 @@ from app.core.provisioning import (
 from app.models.channel import Channel
 from app.models.operator import Operator
 from app.models.tenant import Tenant
+from tests.conftest import isolated_settings
 
 IG_ACCOUNT_ID = "37823824730565264"
 
 
 def _settings(**overrides: object) -> Settings:
-    base = {
-        "database_url": "postgresql+asyncpg://test:test@localhost/test",
-        "redis_url": "redis://localhost:6379/0",
-        "webhook_verify_token": "test-verify-token",
-        "meta_app_secret": "test-app-secret",
-        "encryption_key": "Hq3_REB-V0twf7iBgCPCSUZQiG44egxyiZg9kOKRxUg=",
-        "gemini_api_key": "test-gemini-key",
-    }
-    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+    return isolated_settings(**overrides)
 
 
 async def _channel(session: AsyncSession) -> Channel | None:

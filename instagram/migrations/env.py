@@ -17,9 +17,16 @@ from app.models import Base
 config = context.config
 
 # Interpret the config file for Python logging.
-# This line sets up loggers basically.
+#
+# disable_existing_loggers=False, unlike Alembic's generated default: the
+# default silences every logger already configured, which includes the
+# application's own (app.core.logging) whenever migrations run in the same
+# process. That is not hypothetical -- the test suite migrates in-process,
+# and with the default nothing the app logged afterwards was recorded at
+# all, which turns any later logging assertion into a test of Alembic's
+# import order.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # DATABASE_URL comes from app settings (env-driven), not from alembic.ini.
 config.set_main_option("sqlalchemy.url", get_settings().database_url)

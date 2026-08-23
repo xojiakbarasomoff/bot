@@ -18,7 +18,7 @@ from app.core.faq_seeding import (
 )
 from app.models.channel import Channel
 from app.models.tenant import Tenant
-from tests.conftest import Seed
+from tests.conftest import Seed, isolated_settings
 
 
 def _write(tmp_path: Path, payload: object) -> Path:
@@ -195,15 +195,7 @@ async def test_resolve_tenant_id_rejects_an_unknown_account_id(
 
 
 def _settings(**overrides: object) -> Settings:
-    base = {
-        "database_url": "postgresql+asyncpg://test:test@localhost/test",
-        "redis_url": "redis://localhost:6379/0",
-        "webhook_verify_token": "test-verify-token",
-        "meta_app_secret": "test-app-secret",
-        "encryption_key": "Hq3_REB-V0twf7iBgCPCSUZQiG44egxyiZg9kOKRxUg=",
-        "gemini_api_key": "test-gemini-key",
-    }
-    return Settings(**{**base, **overrides})  # type: ignore[arg-type]
+    return isolated_settings(**overrides)
 
 
 async def test_seeding_is_skipped_when_unconfigured() -> None:

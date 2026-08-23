@@ -1,15 +1,21 @@
+import asyncio
+import os
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlparse, urlunparse
 from uuid import UUID
 
+import asyncpg
 import pytest
+from alembic import command
+from alembic.config import Config
 from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.encryption import encrypt
 from app.core.passwords import hash_password
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
@@ -34,6 +40,112 @@ from app.repositories.message import MessageRepository
 from app.repositories.operator import OperatorRepository
 from app.repositories.tenant import TenantRepository
 from app.repositories.user import UserRepository
+
+# --- the database these tests run against ---------------------------------
+#
+# Its own, never the one the application is using. Several tests ask the
+# database a genuinely global question -- "how many clinics exist?", "is
+# anything provisioned yet?" -- and those cannot be scoped to rows the test
+# created, because the code under test is not scoped either. Run against a
+# development database with a clinic in it and they fail; run against an
+# empty one and they pass. That made the suite a report on how the
+# developer's machine happened to be configured.
+#
+# Derived from DATABASE_URL rather than configured separately, so there is
+# nothing to keep in sync: whatever server the app is pointed at, the tests
+# get a "<name>_test" database on it.
+_TEST_DB_SUFFIX = "_test"
+
+
+def _with_database(url: str, name: str) -> str:
+    parts = urlparse(url)
+    return urlunparse(parts._replace(path=f"/{name}"))
+
+
+async def _create_database_if_missing(base_url: str, name: str) -> None:
+    """CREATE DATABASE, over asyncpg directly.
+
+    Not through SQLAlchemy: CREATE DATABASE cannot run inside a transaction,
+    and the synchronous driver SQLAlchemy would reach for on a driverless URL
+    (psycopg2) is not a dependency of this project.
+    """
+    parts = urlparse(_with_database(base_url, "postgres"))
+    connection = await asyncpg.connect(
+        user=parts.username,
+        password=parts.password,
+        host=parts.hostname,
+        port=parts.port or 5432,
+        database="postgres",
+    )
+    try:
+        exists = await connection.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
+        if not exists:
+            # Quoted identifier, not a bind parameter -- CREATE DATABASE
+            # takes none. The name is derived from our own configuration,
+            # never from anything a test supplies.
+            await connection.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await connection.close()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def test_database() -> Iterator[str]:
+    """Create the test database if it does not exist, migrate it, and point
+    the whole process at it.
+
+    The environment variable, not just a fixture: code under test opens its
+    own sessions through app.core.db (provisioning and FAQ seeding both do),
+    and those read get_settings() rather than anything a fixture could hand
+    them. Setting DATABASE_URL and clearing the cache is what makes those
+    connections land in the test database too.
+    """
+    original = os.environ.get("DATABASE_URL")
+    base_url = get_settings().database_url
+    name = urlparse(base_url).path.lstrip("/") + _TEST_DB_SUFFIX
+    test_url = _with_database(base_url, name)
+
+    asyncio.run(_create_database_if_missing(base_url, name))
+
+    os.environ["DATABASE_URL"] = test_url
+    get_settings.cache_clear()
+
+    # Through Alembic rather than metadata.create_all: the schema the tests
+    # run against is then the schema a deploy produces, migrations included
+    # -- a create_all schema would silently diverge the moment a migration
+    # did something the models do not describe, which is exactly where the
+    # interesting bugs live.
+    command.upgrade(Config("alembic.ini"), "head")
+
+    try:
+        yield test_url
+    finally:
+        if original is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = original
+        get_settings.cache_clear()
+
+
+def isolated_settings(**overrides: object) -> Settings:
+    """A Settings built from these arguments and nothing else.
+
+    `_env_file=None` is the point. Without it pydantic-settings reads the
+    developer's own .env, so a test asserting "no clinic phone number is
+    configured" passes on a machine where none is and fails on one where one
+    is — again, the machine actually running the deployment. Every value the
+    app requires at startup is supplied here so that switching the file off
+    cannot fail validation.
+    """
+    base: dict[str, object] = {
+        "database_url": "postgresql+asyncpg://test:test@localhost/test",
+        "redis_url": "redis://localhost:6379/0",
+        "webhook_verify_token": "test-verify-token",
+        "meta_app_secret": "test-app-secret",
+        "encryption_key": "Hq3_REB-V0twf7iBgCPCSUZQiG44egxyiZg9kOKRxUg=",
+        "session_secret_key": "test-session-secret",
+        "gemini_api_key": "test-gemini-key",
+    }
+    return Settings(_env_file=None, **{**base, **overrides})  # type: ignore[arg-type]
 
 
 @pytest.fixture
