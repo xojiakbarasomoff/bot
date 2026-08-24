@@ -161,6 +161,15 @@ class Settings(BaseSettings):
     seed_faqs_from: str | None = Field(default=None, alias="SEED_FAQS_FROM")
 
     model_provider: Literal["openai", "gemini"] = Field(default="gemini", alias="MODEL_PROVIDER")
+
+    # Which Gemini model answers. Configurable because the free tier meters
+    # requests per project *per model*: with one model's daily allowance
+    # spent, the deployment goes silent, and the only lever that helps
+    # before the quota resets is pointing it at a different model. That is a
+    # decision for whoever is watching the logs at the time, not one worth a
+    # redeploy of new code. Concrete versions only, no "-latest" alias --
+    # see GeminiLLMProvider for why.
+    gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 

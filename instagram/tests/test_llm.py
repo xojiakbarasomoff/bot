@@ -173,3 +173,30 @@ def test_gemini_llm_provider_without_key_raises() -> None:
     settings = TEST_SETTINGS.model_copy(update={"gemini_api_key": None})
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
         GeminiLLMProvider(settings=settings)
+
+
+async def test_gemini_asks_the_model_named_in_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment whose daily allowance for one model is spent has to be
+    able to move to another without shipping code, so the model name has to
+    come from configuration rather than from the default argument.
+    """
+    fake_client = _FakeGeminiClient("Ha, albatta!")
+    monkeypatch.setattr("app.rag.llm.genai.Client", lambda **kwargs: fake_client)
+
+    provider = GeminiLLMProvider(
+        settings=TEST_SETTINGS.model_copy(update={"gemini_model": "gemini-3.1-flash-lite"})
+    )
+    await provider.generate("system", [{"role": "user", "content": "salom"}])
+
+    assert fake_client.aio.models.generate_content.await_args.kwargs["model"] == (
+        "gemini-3.1-flash-lite"
+    )
+
+
+def test_gemini_model_defaults_to_the_pinned_one() -> None:
+    """Unset, nothing moves: the default is still the concrete version that
+    was verified against the real API, not an alias.
+    """
+    assert TEST_SETTINGS.gemini_model == "gemini-2.5-flash"

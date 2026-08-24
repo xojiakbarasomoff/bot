@@ -64,11 +64,17 @@ class GeminiLLMProvider(LLMProvider):
     # bad for reproducing behavior/debugging later. The newer
     # gemini-3.7-flash was tried too and returned a 503 (overloaded) at
     # verification time — not reliable enough to default to.
-    def __init__(self, settings: Settings | None = None, model: str = "gemini-2.5-flash") -> None:
-        api_key = (settings or get_settings()).gemini_api_key
+    #
+    # The default lives on Settings.gemini_model rather than here, so that a
+    # deployment whose daily free-tier allowance for one model is spent can
+    # be moved to another by setting GEMINI_MODEL, without waiting for a
+    # code change to ship.
+    def __init__(self, settings: Settings | None = None, model: str | None = None) -> None:
+        resolved = settings or get_settings()
+        api_key = resolved.gemini_api_key
         if api_key is None:
             raise ValueError("GEMINI_API_KEY is required to use GeminiLLMProvider")
-        self._model = model
+        self._model = model or resolved.gemini_model
         self._client = genai.Client(api_key=api_key)
 
     async def generate(self, system_prompt: str, messages: list[ChatMessage]) -> str:
