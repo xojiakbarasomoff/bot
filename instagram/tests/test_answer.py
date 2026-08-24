@@ -321,11 +321,18 @@ async def test_prompt_asks_for_a_phone_number_for_the_call_centre(
     """
     system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
 
-    assert "asking for" in system_prompt
-    assert "phone number so a colleague can call them back" in system_prompt
+    assert "the conversation is worth more to the clinic if it ends with a number" in (
+        system_prompt
+    )
+    # Asked as the way to the thing the patient already wants, not as a
+    # demand: "leave your number" is the phrasing people scroll past.
+    assert "Offer the reason, not the demand" in system_prompt
+    # And not on every turn. Asking twice in a row is what turns the request
+    # into something a patient reads as a script and stops answering.
+    assert "Never ask twice in a row" in system_prompt
     # Asking must not displace the answer, or the bot reads as a lead-capture
     # form that ignores what the patient came to ask.
-    assert "never let it crowd out the answer" in system_prompt
+    assert "never crowds out the answer" in system_prompt
 
 
 async def test_no_match_response_asks_for_a_phone_number(

@@ -1,0 +1,217 @@
+"""Reading a conversation before answering it.
+
+These decide whether the assistant greets again and whether it asks for a
+number again, so the interesting cases are the ones where getting it wrong
+is visible to a patient: greeting somebody for the fifth time, or asking for
+a number they already typed.
+"""
+
+import pytest
+
+from app.rag.llm import ChatMessage
+from app.services.conversation_signals import (
+    looks_like_a_phone_number,
+    read_signals,
+    render,
+)
+
+
+def _user(content: str) -> ChatMessage:
+    return {"role": "user", "content": content}
+
+
+def _assistant(content: str) -> ChatMessage:
+    return {"role": "assistant", "content": content}
+
+
+# --- is this the first message ---------------------------------------------
+
+
+def test_no_history_is_the_opening_message() -> None:
+    assert read_signals(None).is_opening
+    assert read_signals([]).is_opening
+
+
+def test_one_earlier_turn_is_already_a_conversation() -> None:
+    """The greeting rule hangs off this: a second hello is the single most
+    obvious tell that nobody is reading.
+    """
+    assert not read_signals([_user("salom")]).is_opening
+
+
+# --- has the patient given a number ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "+998 90 123 45 67",
+        "998901234567",
+        "901234567",
+        "90 123 45 67",
+        "raqamim: +998-90-123-45-67",
+        "(90) 123-45-67 shu raqamga qo'ng'iroq qiling",
+    ],
+)
+def test_a_number_written_the_way_people_write_it_is_recognised(text: str) -> None:
+    assert looks_like_a_phone_number(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "implant qancha turadi?",
+        "3 500 000 so'm",
+        "narxi 3500000",
+        "09:00 dan 20:00 gacha",
+        "2026-yil 24-avgust",
+        "5 ta tishim og'riyapti",
+        "",
+    ],
+)
+def test_ordinary_numbers_in_a_message_are_not_a_phone_number(text: str) -> None:
+    """A price or an opening time reading as a phone number would silently
+    stop the assistant ever asking for one — the failure would look like the
+    assistant simply not doing its job.
+    """
+    assert not looks_like_a_phone_number(text)
+
+
+def test_a_number_the_clinic_quoted_is_not_a_number_the_patient_gave() -> None:
+    """Only the patient's own turns count. The assistant reading out the
+    clinic's phone number must not convince it that the patient has left
+    theirs.
+    """
+    history = [
+        _user("telefon raqamingiz bormi?"),
+        _assistant("Albatta — +998 33 667 77 88 raqamiga qo'ng'iroq qilsangiz bo'ladi."),
+    ]
+
+    assert not read_signals(history).patient_left_number
+
+
+def test_a_number_given_earlier_is_remembered() -> None:
+    history = [_user("salom"), _assistant("Va alaykum assalom!"), _user("+998901234567")]
+
+    assert read_signals(history).patient_left_number
+
+
+# --- how often we have already asked ---------------------------------------
+
+
+def test_asking_is_counted_so_it_is_not_repeated() -> None:
+    history = [
+        _user("implant qancha?"),
+        _assistant(
+            "Implantatsiya 3 500 000 so'mdan. Qulay vaqtingizni ayting, hamkasbim "
+            "qo'ng'iroq qilib kelishib oladi."
+        ),
+        _user("o'ylab ko'raman"),
+        _assistant("Albatta. Telefon raqamingizni qoldirsangiz, o'zimiz bog'lanamiz."),
+    ]
+
+    assert read_signals(history).times_asked_for_number == 2
+
+
+def test_a_reply_that_never_mentions_a_number_is_not_counted_as_asking() -> None:
+    history = [
+        _user("ish vaqtingiz?"),
+        _assistant("Har kuni 09:00 dan 20:00 gacha ishlaymiz."),
+    ]
+
+    assert read_signals(history).times_asked_for_number == 0
+
+
+def test_asking_is_counted_in_russian_and_in_cyrillic_uzbek() -> None:
+    """The clinic answers in three written forms, and a counter that only
+    understood one of them would let the assistant ask again in the very
+    next message — the behaviour this exists to prevent.
+    """
+    russian = [_user("сколько стоит?"), _assistant("Оставьте номер, коллега перезвонит.")]
+    cyrillic = [_user("нарх?"), _assistant("Телефон рақамингизни қолдиринг.")]
+
+    assert read_signals(russian).times_asked_for_number == 1
+    assert read_signals(cyrillic).times_asked_for_number == 1
+
+
+# --- how it reaches the prompt ---------------------------------------------
+
+
+def test_the_opening_message_is_stated_plainly() -> None:
+    rendered = render(read_signals([]))
+
+    assert "first message" in rendered
+    assert "not given you a phone number yet" in rendered
+    assert "not asked them for their number" in rendered
+
+
+def test_a_continuing_conversation_says_so() -> None:
+    rendered = render(read_signals([_user("salom"), _assistant("Va alaykum assalom!")]))
+
+    assert "middle of this conversation" in rendered
+    assert "first message" not in rendered
+
+
+def test_a_number_already_given_is_stated_so_it_is_not_asked_for_again() -> None:
+    rendered = render(read_signals([_user("+998901234567")]))
+
+    assert "already given you a phone number" in rendered
+
+
+@pytest.mark.parametrize(("asks", "expected"), [(1, "once"), (2, "2 times"), (3, "3 times")])
+def test_the_number_of_previous_asks_is_stated(asks: int, expected: str) -> None:
+    history: list[ChatMessage] = []
+    for _ in range(asks):
+        history.append(_user("hmm"))
+        history.append(_assistant("Telefon raqamingizni qoldiring."))
+
+    assert expected in render(read_signals(history))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Qulay vaqtingizni ayting, hamkasbim qo'ng'iroq qilib kelishib oladi.",
+        "Qulay vaqtingizni ayting, hamkasbim qoʻngʻiroq qilib kelishib oladi.",
+        "Qulay vaqtingizni ayting, hamkasbim qo‘ng‘iroq qilib kelishib oladi.",
+        "Скажите удобное время, коллега перезвонит.",
+        "Qachon qulay bo'lsa ayting, o'zimiz bog'lanamiz.",
+    ],
+)
+def test_asking_by_offering_the_call_is_counted_even_without_the_word_number(
+    reply: str,
+) -> None:
+    """The phrasing rule 7 actually recommends — offer the callback, not the
+    demand — need never contain "raqam" at all. A counter that only knew the
+    phone words would read this as "never asked" and let the assistant ask
+    again in the very next message, which is the whole problem.
+
+    The apostrophe is written at least three ways in Uzbek Latin depending
+    on the keyboard, and all of them have to count.
+    """
+    history = [_user("implant qancha?"), _assistant(reply)]
+
+    assert read_signals(history).times_asked_for_number == 1
+
+
+def test_a_number_typed_in_the_message_being_answered_counts_right_away() -> None:
+    """The number arrives in the turn being answered, not in history, so a
+    facts block reading only history would say "they have not given you a
+    phone number yet" directly above a message containing one — and the
+    reply would ask for something the patient had just typed.
+    """
+    signals = read_signals([_user("qabulga yozmoqchiman")], "+998901234567, ertalab qulay")
+
+    assert signals.patient_left_number
+    assert "already given you a phone number" in render(signals)
+
+
+def test_the_current_message_does_not_make_an_opening_look_like_a_continuation() -> None:
+    """Someone who opens with their number is still opening the
+    conversation, and should still be greeted.
+    """
+    assert read_signals([], "+998901234567").is_opening
+
+
+def test_the_patients_own_message_is_never_counted_as_us_asking() -> None:
+    assert read_signals([], "telefon raqamingiz bormi?").times_asked_for_number == 0
