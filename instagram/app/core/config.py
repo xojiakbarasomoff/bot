@@ -170,6 +170,29 @@ class Settings(BaseSettings):
     # redeploy of new code. Concrete versions only, no "-latest" alias --
     # see GeminiLLMProvider for why.
     gemini_model: str = Field(default="gemini-2.5-flash", alias="GEMINI_MODEL")
+
+    # Which backend writes the replies, when that should not be the same one
+    # that makes the embeddings. Unset, it follows MODEL_PROVIDER and nothing
+    # changes.
+    #
+    # The two are separable in one direction only, and that is the whole
+    # reason this exists. Swapping the model that writes a reply costs
+    # nothing: the next message is simply written by something else.
+    # Swapping the model that makes embeddings invalidates every vector in
+    # knowledge_base -- they are only comparable to vectors from the same
+    # model -- so it means re-embedding the clinic's whole FAQ before
+    # retrieval finds anything again. A deployment that has run out of one
+    # provider's daily allowance needs the cheap half of that, immediately,
+    # and should not have to take the expensive half with it.
+    llm_provider: Literal["openai", "gemini", "qwen"] | None = Field(
+        default=None, alias="LLM_PROVIDER"
+    )
+
+    # Hugging Face access token. Its Inference Providers router is
+    # OpenAI-compatible, which is what lets Qwen be reached through the same
+    # client as OpenAI rather than through a third SDK.
+    hf_token: str | None = Field(default=None, alias="HF_TOKEN")
+    qwen_model: str = Field(default="Qwen/Qwen3-235B-A22B-Instruct-2507", alias="QWEN_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
 
@@ -236,6 +259,16 @@ class Settings(BaseSettings):
             raise ValueError("OPENAI_API_KEY is required when MODEL_PROVIDER=openai")
         if self.model_provider == "gemini" and self.gemini_api_key is None:
             raise ValueError("GEMINI_API_KEY is required when MODEL_PROVIDER=gemini")
+        # Checked at startup rather than on the first patient message: a
+        # deployment that names a provider it has no credential for should
+        # refuse to boot, not accept webhooks and then fail to answer every
+        # one of them.
+        if self.llm_provider == "qwen" and self.hf_token is None:
+            raise ValueError("HF_TOKEN is required when LLM_PROVIDER=qwen")
+        if self.llm_provider == "openai" and self.openai_api_key is None:
+            raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+        if self.llm_provider == "gemini" and self.gemini_api_key is None:
+            raise ValueError("GEMINI_API_KEY is required when LLM_PROVIDER=gemini")
         return self
 
     @model_validator(mode="after")

@@ -5,7 +5,14 @@ import pytest
 from google.genai import types as genai_types
 
 from app.core.config import Settings
-from app.rag.llm import GeminiLLMProvider, OpenAILLMProvider, _select_llm_provider
+from app.rag.embeddings import GeminiEmbeddingProvider, _select_embedding_provider
+from app.rag.llm import (
+    HF_ROUTER_BASE_URL,
+    GeminiLLMProvider,
+    OpenAILLMProvider,
+    QwenLLMProvider,
+    _select_llm_provider,
+)
 
 TEST_SETTINGS = Settings(
     database_url="postgresql+asyncpg://test:test@localhost/test",
@@ -200,3 +207,64 @@ def test_gemini_model_defaults_to_the_pinned_one() -> None:
     was verified against the real API, not an alias.
     """
     assert TEST_SETTINGS.gemini_model == "gemini-2.5-flash"
+
+
+# --- Qwen, through Hugging Face's OpenAI-compatible router ---
+
+
+def test_qwen_talks_to_the_hugging_face_router_with_the_hugging_face_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """It is the OpenAI client, pointed elsewhere — so the thing worth
+    asserting is that it is pointed elsewhere, and with the right credential.
+    Sending an OpenAI key to Hugging Face, or an HF token to OpenAI, fails at
+    the first patient message rather than here.
+    """
+    captured: dict[str, object] = {}
+
+    def _fake_client(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("app.rag.llm.AsyncOpenAI", _fake_client)
+
+    QwenLLMProvider(settings=TEST_SETTINGS.model_copy(update={"hf_token": "hf_test"}))
+
+    assert captured["api_key"] == "hf_test"
+    assert captured["base_url"] == HF_ROUTER_BASE_URL
+
+
+def test_qwen_without_a_token_says_which_variable_is_missing() -> None:
+    with pytest.raises(ValueError, match="HF_TOKEN"):
+        QwenLLMProvider(settings=TEST_SETTINGS)
+
+
+def test_llm_provider_overrides_the_backend_that_writes_replies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.rag.llm.AsyncOpenAI", lambda **kwargs: object())
+    settings = TEST_SETTINGS.model_copy(update={"llm_provider": "qwen", "hf_token": "hf_test"})
+
+    assert isinstance(_select_llm_provider(settings), QwenLLMProvider)
+
+
+def test_overriding_the_reply_backend_leaves_embeddings_where_they_are() -> None:
+    """The point of the override. Moving embeddings invalidates every vector
+    in knowledge_base, so a deployment switching the model that writes
+    replies must not drag the clinic's FAQ along with it.
+    """
+    monkeypatch_free = TEST_SETTINGS.model_copy(
+        update={"llm_provider": "qwen", "hf_token": "hf_test"}
+    )
+
+    assert monkeypatch_free.model_provider == "gemini"
+    assert isinstance(_select_embedding_provider(monkeypatch_free), GeminiEmbeddingProvider)
+
+
+def test_unset_llm_provider_follows_model_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing moves unless somebody sets it."""
+    fake_client = _FakeGeminiClient("ok")
+    monkeypatch.setattr("app.rag.llm.genai.Client", lambda **kwargs: fake_client)
+
+    assert TEST_SETTINGS.llm_provider is None
+    assert isinstance(_select_llm_provider(TEST_SETTINGS), GeminiLLMProvider)

@@ -96,9 +96,53 @@ class GeminiLLMProvider(LLMProvider):
         return response.text
 
 
+# Hugging Face's Inference Providers router, which speaks the OpenAI chat
+# completions API. Reached through AsyncOpenAI with the base URL swapped
+# rather than through a Hugging Face SDK: it is the same protocol, and one
+# client with two base URLs is less to keep working than two clients.
+HF_ROUTER_BASE_URL = "https://router.huggingface.co/v1"
+
+
+class QwenLLMProvider(LLMProvider):
+    """Qwen, served through Hugging Face's OpenAI-compatible router.
+
+    Kept as its own class rather than as an argument to OpenAILLMProvider
+    because it reads a different credential and has a different default
+    model, and because "which provider is this deployment on" should be
+    answerable by looking at the type.
+    """
+
+    def __init__(self, settings: Settings | None = None, model: str | None = None) -> None:
+        resolved = settings or get_settings()
+        if resolved.hf_token is None:
+            raise ValueError("HF_TOKEN is required to use QwenLLMProvider")
+        self._model = model or resolved.qwen_model
+        self._client = AsyncOpenAI(api_key=resolved.hf_token, base_url=HF_ROUTER_BASE_URL)
+
+    async def generate(self, system_prompt: str, messages: list[ChatMessage]) -> str:
+        payload = cast(
+            "list[ChatCompletionMessageParam]",
+            [{"role": "system", "content": system_prompt}, *messages],
+        )
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=payload,
+        )
+        content = response.choices[0].message.content
+        if content is None:
+            raise ValueError("Qwen chat completion returned no text content")
+        return content
+
+
 def _select_llm_provider(settings: Settings) -> LLMProvider:
-    if settings.model_provider == "openai":
+    # LLM_PROVIDER, when set, overrides MODEL_PROVIDER for replies only —
+    # embeddings stay where they are, because moving those means re-embedding
+    # the knowledge base (see Settings.llm_provider).
+    chosen = settings.llm_provider or settings.model_provider
+    if chosen == "openai":
         return OpenAILLMProvider(settings)
+    if chosen == "qwen":
+        return QwenLLMProvider(settings)
     return GeminiLLMProvider(settings)
 
 
