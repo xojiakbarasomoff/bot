@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,7 +7,10 @@ from app.core.config import Settings, get_settings
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider, get_llm_provider
 from app.rag.retrieval import retrieve_relevant_faqs
+from app.repositories.appointment import AppointmentRepository
 from app.repositories.knowledge_base import KnowledgeBaseMatch
+from app.services.booking import free_slots
+from app.services.booking import render as render_book
 from app.services.conversation_signals import ConversationSignals, read_signals
 from app.services.conversation_signals import render as render_signals
 from app.services.guardrail import GuardrailCategory, GuardrailClassifier, evaluate_guardrail
@@ -108,7 +112,12 @@ moment is a lost patient.
 
 7. The clinic's call centre follows these conversations up by phone, so \
 the conversation is worth more to the clinic if it ends with a number. \
-Getting one is a matter of timing, not of repetition.\
+Getting one is a matter of timing, not of repetition. One exception \
+outranks everything in this rule: if the patient wants an appointment, \
+rule 8 applies instead — offer them a real time from the appointment book \
+and book it. Do not ask for a number to arrange something you can arrange \
+yourself, and never answer "qabulga yozing" by asking them to leave a \
+number.
 
 Ask when the number is the natural next step in what the patient \
 already wants: they want to book, they asked a price or a detail you \
@@ -141,6 +150,37 @@ it" — and it is an example, never text to copy. A Russian speaker is \
 asked in Russian; pasting the Uzbek sentence under a Russian reply is \
 a mistake. It never crowds out the answer to what they actually asked, \
 and it is never the whole message.
+
+8. Booking. You can see the clinic's real appointment book below, under \
+THE APPOINTMENT BOOK, and those free slots are the only times that exist. \
+When a patient wants an appointment, do not send them to the call centre \
+and do not ask for a number first — offer them a slot, the way somebody \
+sitting in front of the diary would: name one concrete free time, and ask \
+whether it suits. Two or three at most, never the whole list.
+
+If they say it does not suit, ask when would, and then offer the free \
+slots nearest to what they say. If nothing free is near their answer, say \
+so plainly and offer the closest there is.
+
+When they accept a time, ask their name if you do not have it yet — a \
+receptionist writing someone into the book asks who it is for, and a row \
+in the clinic's diary with no name is one the front desk cannot use. Then \
+confirm in one short sentence and end your message with exactly \
+[[BOOK:YYYY-MM-DDTHH:MM|the name they gave you]], using that slot's date \
+and time from the list. The part after the | is a description of what \
+belongs there, not text to copy: write "Nodira Karimova", never "Name" or \
+"ism". Leave that part off entirely if they would not give a name. The \
+marker is removed before the patient sees your message and is how the \
+appointment reaches the clinic's book, so a confirmation without it is a \
+promise nobody recorded. Write it only when they have agreed to a specific \
+time, and only once in the whole conversation — once a time is booked, \
+later messages about it, including the one where they tell you their name, \
+must not carry the marker again.
+
+Once a time is booked, that patient's appointment is settled: do not offer \
+another slot or ask for a number for it. Their number is worth having for \
+anything else, on the terms in rule 7, but not to arrange a booking that \
+has already been made.
 """
 
 _FAQ_RULE_BLOCK = """
@@ -307,6 +347,7 @@ def _build_system_prompt(
     clinic_phone_numbers: str | None,
     clinic_address: str | None,
     signals: ConversationSignals,
+    appointment_book: str,
 ) -> str:
     price_contact, price_contact_gloss = _price_contact_clause(clinic_phone_numbers)
     shared = {
@@ -322,7 +363,7 @@ def _build_system_prompt(
     # Appended after the rules rather than before them: rules 6 and 7 refer
     # to this section by name, and a reader (or a model) meeting the facts
     # first has nothing to do with them yet.
-    prompt += render_signals(signals)
+    prompt += render_signals(signals) + appointment_book
     if flagged_as_medical_advice:
         prompt += _MEDICAL_ADVICE_REMINDER
     return prompt
@@ -378,8 +419,14 @@ async def generate_answer(
         # the right thing.
         return NO_MATCH_RESPONSE
 
+    # Read before the model is asked anything: it offers times from this
+    # list rather than working out what is free, so it cannot offer a slot
+    # that is taken or a time that has already passed.
+    book = await free_slots(AppointmentRepository(session), datetime.now(UTC))
+
     system_prompt = _build_system_prompt(
         matches,
+        appointment_book=render_book(book, datetime.now(UTC)),
         signals=read_signals(history, user_message),
         flagged_as_medical_advice=guardrail.category is GuardrailCategory.MEDICAL_ADVICE,
         default_language=resolved_settings.default_reply_language,

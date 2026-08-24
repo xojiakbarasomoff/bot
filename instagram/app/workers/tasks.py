@@ -28,9 +28,13 @@ from app.core.db import db_session
 from app.core.logging import configure_logging
 from app.core.redaction import preview
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
+from app.models.channel import Channel
+from app.models.conversation import Conversation
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.llm import LLMProvider
+from app.repositories.appointment import AppointmentRepository
 from app.services.answer import generate_answer
+from app.services.booking import settle as settle_booking
 from app.services.conversation import (
     context_for_reply,
     last_inbound_at,
@@ -93,6 +97,26 @@ async def process_inbound_message(
                 llm_provider=llm_provider,
                 history=history,
             )
+
+            # The reply may carry a booking the assistant agreed to. Settled
+            # here rather than inside generate_answer: that function reads,
+            # and this writes a row the clinic will act on, so it belongs in
+            # the same place as the rest of this task's transaction.
+            conversation = await session.get(Conversation, conversation_uuid)
+            channel = await session.get(Channel, uuid.UUID(channel_id))
+            if conversation is not None:
+                reply, appointment = await settle_booking(
+                    AppointmentRepository(session),
+                    reply,
+                    user_id=conversation.user_id,
+                    conversation_id=conversation_uuid,
+                    # "instagram" / "telegram", so the dashboard's SOURCE
+                    # column says where the booking came from — beside
+                    # "operator" for the ones staff enter by hand.
+                    source=str(channel.type) if channel is not None else "bot",
+                )
+                if appointment is not None:
+                    await session.commit()
 
             # Full reply text stays out of INFO — it is patient-adjacent
             # content that should not sit in logs that may ship to external

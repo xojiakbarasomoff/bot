@@ -90,8 +90,14 @@ def is_within_working_hours(scheduled_at: datetime) -> bool:
     return minutes_since_open % SLOT_MINUTES == 0
 
 
-def _day_slots(local_date: date) -> Iterator[datetime]:
-    """Every bookable local slot start on local_date, tz-aware in CLINIC_TIMEZONE."""
+def day_slots(local_date: date) -> Iterator[datetime]:
+    """Every bookable local slot start on local_date, tz-aware in CLINIC_TIMEZONE.
+
+    Public because app.services.booking walks the same grid to list what is
+    free for the assistant to offer — one definition of "a slot", so the
+    times a patient is offered cannot drift from the times that can be
+    booked.
+    """
     current = datetime.combine(local_date, WORK_START, tzinfo=CLINIC_TIMEZONE)
     end = datetime.combine(local_date, WORK_END, tzinfo=CLINIC_TIMEZONE)
     step = timedelta(minutes=SLOT_MINUTES)
@@ -104,10 +110,10 @@ def _first_slot_on_or_after(local_dt: datetime) -> datetime:
     """The first grid-aligned local slot start that is >= local_dt — rolls
     to the next day's opening slot if local_dt is after today's last slot.
     """
-    for slot in _day_slots(local_dt.date()):
+    for slot in day_slots(local_dt.date()):
         if slot >= local_dt:
             return slot
-    return next(iter(_day_slots(local_dt.date() + timedelta(days=1))))
+    return next(iter(day_slots(local_dt.date() + timedelta(days=1))))
 
 
 async def check_availability(repo: AppointmentRepository, scheduled_at: datetime) -> bool:
@@ -152,7 +158,7 @@ async def find_next_free_slot(
 
     for day_offset in range(horizon_days + 1):
         day = local_start.date() + timedelta(days=day_offset)
-        for slot in _day_slots(day):
+        for slot in day_slots(day):
             if slot < local_start:
                 continue
             candidate_utc = slot.astimezone(UTC)
