@@ -147,7 +147,10 @@ async def test_login_success_sets_cookie_and_redirects(
     )
     response = await _login(client, "op-ok", "correct-horse")
     assert response.status_code == 303
-    assert response.headers["location"] == "/dashboard/appointments"
+    # The operator dashboard, not the appointments page: everything an
+    # operator came for -- conversations, leads, doctors, FAQs, settings --
+    # lives at /admin/, and a login that lands elsewhere hides all of it.
+    assert response.headers["location"] == "/admin/"
     assert "session" in response.cookies
 
 

@@ -127,9 +127,12 @@ async def login_submit(
 
     await reset_login_attempts(pool, username)
     cookie_value, _csrf_token = create_session_cookie(operator.id)
-    response = RedirectResponse(
-        url="/dashboard/appointments", status_code=status.HTTP_303_SEE_OTHER
-    )
+    # /admin/, not /dashboard/appointments: the operator dashboard is the one
+    # served from app/static/admin, with conversations, leads, doctors, the
+    # knowledge base and clinic settings on it. /dashboard predates the merge
+    # and is a single server-rendered day of appointments -- landing there
+    # made the whole product look like a booking form with nothing behind it.
+    response = RedirectResponse(url="/admin/", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         SESSION_COOKIE_NAME,
         cookie_value,
