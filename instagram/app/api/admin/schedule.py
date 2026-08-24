@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.api.admin.deps import require_manage_role, verify_csrf_header
+from app.api.admin.deps import require_patient_access, verify_csrf_header
 from app.api.admin.schemas import (
     AnalyticsSummary,
     AppointmentCreate,
@@ -87,7 +87,7 @@ async def list_appointments(
 )
 async def create(
     payload: AppointmentCreate,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> AppointmentOut:
     doctor_name = UNASSIGNED_DOCTOR_NAME
@@ -140,7 +140,7 @@ async def _load(session: AsyncSession, appointment_id: uuid.UUID) -> Appointment
 )
 async def cancel(
     appointment_id: uuid.UUID,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> AppointmentOut:
     repo = AppointmentRepository(session)
@@ -157,7 +157,7 @@ async def cancel(
 )
 async def confirm(
     appointment_id: uuid.UUID,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> AppointmentOut:
     """Records that somebody spoke to the patient. The slot stays held —

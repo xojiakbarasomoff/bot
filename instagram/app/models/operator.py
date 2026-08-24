@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, ForeignKey, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -8,15 +8,27 @@ from app.models.base import Base
 
 
 class Operator(Base):
-    # Clinic staff accounts (not patients — see User for patients). Both
-    # "doctor" (view-only) and "operator" (view + book/cancel) dashboard
-    # roles are rows here — see app.api.auth for the login/permission logic.
+    # Clinic staff accounts (not patients — see User for patients). The role
+    # is one of app.core.roles.Role — "doctor" (read), "operator" (read +
+    # patients and bookings) or "admin" (that, plus the knowledge base,
+    # clinic settings and staff accounts). Kept as text with a CHECK
+    # constraint rather than a PostgreSQL enum: adding a role to an enum
+    # type needs its own migration and cannot be done inside a transaction
+    # on older servers, and the constraint gives the same guarantee.
     __tablename__ = "operators"
     # Globally unique, not per-tenant: the login form is just
     # username+password with no separate clinic/tenant selector, so the
     # username alone must resolve to exactly one operator (and thus one
     # tenant) — see app.api.auth.login_submit.
-    __table_args__ = (UniqueConstraint("username", name="uq_operators_username"),)
+    __table_args__ = (
+        UniqueConstraint("username", name="uq_operators_username"),
+        # The allow-list in app.core.roles decides what a role may do; this
+        # decides what a role may be. Declared here as well as in the
+        # migration so that anything writing straight to the table -- a
+        # script, a psql session, a future migration -- is held to the same
+        # three values the application knows how to reason about.
+        CheckConstraint("role IN ('admin', 'operator', 'doctor')", name="role"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")

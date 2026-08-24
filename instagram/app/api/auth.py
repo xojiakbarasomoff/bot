@@ -68,17 +68,6 @@ async def get_current_operator(
         reset_current_tenant(tenant_token)
 
 
-async def require_operator_role(operator: Operator = Depends(get_current_operator)) -> Operator:
-    """Gate for the mutating dashboard routes (create/cancel) — doctors get
-    get_current_operator's view access but not this.
-    """
-    if operator.role != "operator":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="This account has view-only access"
-        )
-    return operator
-
-
 async def verify_csrf(request: Request, session: Session = Depends(get_current_session)) -> None:
     """Double-submit CSRF check: the hidden csrf_token form field must match
     the token bound into this operator's own signed session cookie. A

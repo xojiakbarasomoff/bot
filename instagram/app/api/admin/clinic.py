@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin.deps import require_manage_role, verify_csrf_header
+from app.api.admin.deps import require_manage_clinic, require_patient_access, verify_csrf_header
 from app.api.admin.schemas import (
     DoctorCreate,
     DoctorOut,
@@ -71,7 +71,7 @@ async def list_doctors(
 )
 async def create_doctor(
     payload: DoctorCreate,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_manage_clinic),
     session: AsyncSession = Depends(get_db_session),
 ) -> DoctorOut:
     doctor = await DoctorRepository(session).create(**payload.model_dump())
@@ -85,7 +85,7 @@ async def create_doctor(
 async def update_doctor(
     doctor_id: uuid.UUID,
     payload: DoctorUpdate,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_manage_clinic),
     session: AsyncSession = Depends(get_db_session),
 ) -> DoctorOut:
     repo = DoctorRepository(session)
@@ -135,7 +135,7 @@ async def list_leads(
 )
 async def create_lead(
     payload: LeadCreate,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> LeadOut:
     lead = await LeadRepository(session).create(**payload.model_dump())
@@ -149,7 +149,7 @@ async def create_lead(
 async def update_lead(
     lead_id: uuid.UUID,
     payload: LeadUpdate,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> LeadOut:
     repo = LeadRepository(session)
@@ -196,7 +196,7 @@ async def list_faqs(
 )
 async def create_faq(
     payload: FaqCreate,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_manage_clinic),
     session: AsyncSession = Depends(get_db_session),
 ) -> FaqOut:
     """Add or update one FAQ.
@@ -218,7 +218,7 @@ async def create_faq(
 )
 async def deactivate_faq(
     faq_id: uuid.UUID,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_manage_clinic),
     session: AsyncSession = Depends(get_db_session),
 ) -> None:
     """Deactivates rather than deletes.
@@ -253,7 +253,7 @@ async def get_settings(
 )
 async def update_settings(
     payload: TenantSettings,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_manage_clinic),
     session: AsyncSession = Depends(get_db_session),
 ) -> TenantSettings:
     """Merges, rather than replaces.

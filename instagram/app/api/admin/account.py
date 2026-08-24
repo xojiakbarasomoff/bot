@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin.deps import verify_csrf_header
+from app.api.admin.deps import require_patient_access, verify_csrf_header
 from app.api.auth import get_current_operator
 from app.core.db import get_db_session
 from app.core.passwords import MIN_PASSWORD_LENGTH, hash_password, verify_password
@@ -49,9 +49,11 @@ async def change_password(
     await session.commit()
 
 
+# Patient names and phone numbers leave the building in this file, so it is
+# gated like any other patient data rather than like a report.
 @router.get("/export/appointments.csv")
 async def export_appointments(
-    operator: Operator = Depends(get_current_operator),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
     day: date | None = Query(default=None, alias="date"),
     days: int = Query(default=1, ge=1, le=92),

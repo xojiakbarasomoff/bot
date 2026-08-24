@@ -11,6 +11,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.roles import Permission
 from app.models.appointment import AppointmentStatus
 from app.models.lead import LeadStatus
 
@@ -31,6 +32,13 @@ class SessionInfo(BaseModel):
     role: str
     tenant_id: uuid.UUID
     tenant_name: str
+    # What this account may do, resolved from its role by app.core.roles.
+    # Sent so the dashboard can hide a control it would only be refused for,
+    # and sent as permissions rather than as a role so the mapping lives in
+    # one place: a UI that re-derives "operators may edit the FAQ" from the
+    # role string is a second copy of the rules, and the copy that drifts is
+    # always the one that is not enforcing anything.
+    permissions: list[Permission]
     # The token every mutating request must echo back in X-CSRF-Token.
     csrf_token: str
 

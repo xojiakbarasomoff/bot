@@ -10,10 +10,12 @@ the URL.
 """
 
 import secrets
+from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, Header, HTTPException, status
 
 from app.api.auth import get_current_operator, get_current_session
+from app.core.roles import Permission, has_permission
 from app.core.session import Session
 from app.models.operator import Operator
 
@@ -36,14 +38,33 @@ async def verify_csrf_header(
         )
 
 
-async def require_manage_role(operator: Operator = Depends(get_current_operator)) -> Operator:
-    """Gate for anything that changes clinic data.
+def require(permission: Permission) -> Callable[..., Awaitable[Operator]]:
+    """Dependency factory gating a route on one permission.
 
-    A `doctor` account gets read access through get_current_operator but not
-    this — it is there to look at the day's schedule, not to rebook it.
+    A factory rather than one dependency per permission so that the route
+    declares the capability it needs — `require(Permission.MANAGE_CLINIC)`
+    reads as what it is, and adding a permission does not mean adding a
+    near-identical function beside three others.
+
+    The check itself lives in app.core.roles: an unrecognised role is
+    refused rather than waved through, which is the whole point of the
+    mapping being an allow-list.
     """
-    if operator.role == "doctor":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="This account has view-only access"
-        )
-    return operator
+
+    async def dependency(operator: Operator = Depends(get_current_operator)) -> Operator:
+        if not has_permission(operator.role, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bu amal uchun ruxsatingiz yo'q",
+            )
+        return operator
+
+    return dependency
+
+
+# Named dependencies, resolved once at import: FastAPI compares Depends()
+# markers by identity when it caches a dependency within a request, so
+# building a fresh one per route would solve the same check repeatedly.
+require_patient_access = require(Permission.HANDLE_PATIENTS)
+require_manage_clinic = require(Permission.MANAGE_CLINIC)
+require_manage_staff = require(Permission.MANAGE_STAFF)

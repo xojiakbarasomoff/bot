@@ -100,6 +100,7 @@
   <button data-tab="doctors" aria-selected="false">Shifokorlar</button>
   <button data-tab="faq" aria-selected="false">Bilim bazasi</button>
   <button data-tab="settings" aria-selected="false">Sozlamalar</button>
+  <button data-tab="staff" aria-selected="false" hidden>Xodimlar</button>
 </nav>
 
 <main>
@@ -199,6 +200,32 @@
     </div>
   </section>
 
+  <section id="tab-staff" hidden>
+    <div class="panel">
+      <h2>Xodimlar</h2>
+      <p class="muted">Kim tizimga kira oladi va qanday huquq bilan.
+        <b>Administrator</b> — hammasi: bilim bazasi, sozlamalar, xodimlar.
+        <b>Operator</b> — bemorlar bilan ishlash: suhbatlar, qabullar, lidlar.
+        <b>Shifokor</b> — faqat ko'rish.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>Ism</th><th>Login</th><th>Rol</th><th></th></tr></thead>
+        <tbody id="staffRows"></tbody>
+      </table></div>
+      <h2 style="margin-top:22px">Yangi xodim</h2>
+      <form id="staffForm" class="grid">
+        <div><label for="sName">Ism</label><input id="sName" required></div>
+        <div><label for="sUser">Login</label><input id="sUser" required pattern="[a-zA-Z0-9._-]{3,}"></div>
+        <div><label for="sPass">Parol</label><input id="sPass" type="password" required minlength="10"></div>
+        <div><label for="sRole">Rol</label><select id="sRole">
+          <option value="operator">Operator</option>
+          <option value="doctor">Shifokor</option>
+          <option value="admin">Administrator</option>
+        </select></div>
+        <div><button class="act primary" type="submit">Qo'shish</button></div>
+      </form>
+    </div>
+  </section>
+
   <section id="tab-settings" hidden>
     <div class="panel">
       <h2>Klinika sozlamalari</h2>
@@ -232,6 +259,7 @@
 const API = "/api/admin";
 let CSRF = "";
 let ROLE = "";
+let PERMISSIONS = new Set();
 let CURRENT_CHAT = null;
 
 // --- plumbing ------------------------------------------------------------
@@ -299,8 +327,20 @@ function localDateTime(iso) {
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
+// The server sends this account's permissions with the session (see
+// app.api.admin.session), so the rules live in one place. Deriving them here
+// from the role string would be a second copy, and the copy that drifts is
+// always the one that is not enforcing anything.
+function can(permission) {
+  return PERMISSIONS.has(permission);
+}
+// Hiding a control the server would refuse is a courtesy, not the check:
+// every one of these calls is enforced again on the request itself.
 function canManage() {
-  return ROLE !== "doctor";
+  return can("handle_patients");
+}
+function canManageClinic() {
+  return can("manage_clinic");
 }
 
 // --- today ---------------------------------------------------------------
@@ -444,7 +484,7 @@ async function loadDoctors() {
       el("td", {}, d.phone || "—"),
       el("td", {}, d.working_hours),
       el("td", {}, el("span", { class: "pill " + (d.is_active ? "ok" : "bad") }, d.is_active ? "faol" : "faol emas")),
-      el("td", {}, canManage()
+      el("td", {}, canManageClinic()
         ? el("button", { class: "act", onclick: () => setDoctorActive(d.id, !d.is_active) }, d.is_active ? "O'chirish" : "Yoqish")
         : null)
     )
@@ -471,7 +511,7 @@ async function loadFaqs() {
       el("td", {}, f.question),
       el("td", {}, f.answer),
       el("td", {}, el("span", { class: "pill " + (f.is_active ? "ok" : "bad") }, f.is_active ? "faol" : "o'chirilgan")),
-      el("td", {}, canManage() && f.is_active
+      el("td", {}, canManageClinic() && f.is_active
         ? el("button", { class: "act danger", onclick: () => removeFaq(f.id) }, "O'chirish")
         : null)
     )
@@ -596,6 +636,74 @@ document.getElementById("logout").addEventListener("click", async () => {
 
 // --- tabs and boot -------------------------------------------------------
 
+// --- staff ---------------------------------------------------------------
+
+const ROLE_LABELS = { admin: "Administrator", operator: "Operator", doctor: "Shifokor" };
+
+async function loadStaff() {
+  const rows = await api("/operators");
+  fill("staffRows", rows.map((m) =>
+    el("tr", {},
+      el("td", {}, m.name),
+      el("td", {}, m.username),
+      el("td", {}, el("select", {
+        onchange: (e) => setStaffRole(m.id, e.target.value),
+      }, ...Object.entries(ROLE_LABELS).map(([value, label]) =>
+        el("option", value === m.role ? { value, selected: "selected" } : { value }, label)
+      ))),
+      el("td", {},
+        el("button", { class: "act", onclick: () => resetStaffPassword(m.id, m.name) }, "Parol"),
+        " ",
+        el("button", { class: "act danger", onclick: () => removeStaff(m.id, m.name) }, "O'chirish"))
+    )
+  ));
+}
+
+async function setStaffRole(id, role) {
+  try {
+    await api("/operators/" + id, { method: "PATCH", body: { role } });
+    toast("Rol o'zgartirildi");
+  } catch (err) {
+    toast(err.message, true);
+  }
+  // Reloaded either way: on failure the <select> is showing a role the
+  // server refused, and leaving it there would misreport who can do what.
+  await loadStaff();
+}
+
+async function resetStaffPassword(id, name) {
+  const password = prompt(`${name} uchun yangi parol (kamida 10 belgi):`);
+  if (!password) return;
+  try {
+    await api("/operators/" + id, { method: "PATCH", body: { password } });
+    toast("Parol yangilandi");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function removeStaff(id, name) {
+  if (!confirm(`${name} o'chirilsinmi? Bu hisob bilan endi tizimga kirib bo'lmaydi.`)) return;
+  try {
+    await api("/operators/" + id, { method: "DELETE" });
+    toast("Xodim o'chirildi");
+    await loadStaff();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// Controls the server would refuse are hidden rather than shown and then
+// rejected. This is presentation only — app.api.admin.deps checks every one
+// of these again on the request itself.
+function applyPermissions() {
+  document.querySelector('#tabs button[data-tab="staff"]').hidden = !can("manage_staff");
+  for (const id of ["doctorForm", "faqForm", "settingsForm"]) {
+    const form = document.getElementById(id);
+    if (form) form.hidden = !canManageClinic();
+  }
+}
+
 const LOADERS = {
   today: () => Promise.all([loadStats(), loadAppointments(), loadDoctors()]),
   chats: loadChats,
@@ -603,6 +711,7 @@ const LOADERS = {
   doctors: loadDoctors,
   faq: loadFaqs,
   settings: loadSettings,
+  staff: loadStaff,
 };
 
 document.getElementById("tabs").addEventListener("click", (e) => {
@@ -617,6 +726,23 @@ document.getElementById("tabs").addEventListener("click", (e) => {
   LOADERS[button.dataset.tab]().catch((err) => toast(err.message, true));
 });
 
+document.getElementById("staffForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    await api("/operators", { method: "POST", body: {
+      name: document.getElementById("sName").value.trim(),
+      username: document.getElementById("sUser").value.trim(),
+      password: document.getElementById("sPass").value,
+      role: document.getElementById("sRole").value,
+    }});
+    e.target.reset();
+    toast("Xodim qo'shildi");
+    await loadStaff();
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
 (async function boot() {
   document.getElementById("apptDate").value = today();
   document.getElementById("nDate").value = today();
@@ -624,6 +750,8 @@ document.getElementById("tabs").addEventListener("click", (e) => {
     const me = await api("/session");
     CSRF = me.csrf_token;
     ROLE = me.role;
+    PERMISSIONS = new Set(me.permissions || []);
+    applyPermissions();
     document.getElementById("whoami").textContent = `${me.name} · ${me.role} · ${me.tenant_name}`;
     await LOADERS.today();
   } catch (err) {

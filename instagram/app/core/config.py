@@ -149,8 +149,8 @@ class Settings(BaseSettings):
     # "operator" (view + book/cancel) rather than "doctor" (view-only): the
     # first account has to be able to actually run the clinic's day, and it
     # is the only account that exists until it creates others.
-    provision_operator_role: Literal["doctor", "operator"] = Field(
-        default="operator", alias="PROVISION_OPERATOR_ROLE"
+    provision_operator_role: Literal["admin", "operator", "doctor"] = Field(
+        default="admin", alias="PROVISION_OPERATOR_ROLE"
     )
 
     # Path to a FAQ JSON file to load into knowledge_base on web startup (see

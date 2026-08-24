@@ -9,7 +9,7 @@ Usage (PowerShell), from the repo root:
 
     $env:TENANT_ID = "ad15de96-15c3-4e97-a51f-66873dfcdcf9"
     $env:OPERATOR_NAME = "Dr. Aziza Karimova"
-    $env:OPERATOR_ROLE = "doctor"          # "doctor" (view-only) or "operator" (view + book/cancel)
+    $env:OPERATOR_ROLE = "operator"        # see app.core.roles: "admin", "operator" or "doctor"
     $env:OPERATOR_USERNAME = "aziza"
     $env:OPERATOR_PASSWORD = "<choose a real password>"
     ./.venv/Scripts/python.exe scripts/create_operator.py
@@ -28,6 +28,7 @@ from sqlalchemy import select
 
 from app.core.db import db_session
 from app.core.passwords import hash_password
+from app.core.roles import Role
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
 from app.models.operator import Operator
 
@@ -42,8 +43,12 @@ async def main() -> None:
     except KeyError as exc:
         sys.exit(f"Missing required environment variable: {exc}")
 
-    if role not in ("doctor", "operator"):
-        sys.exit(f"OPERATOR_ROLE must be 'doctor' or 'operator', got {role!r}")
+    # Checked here as well as by the database's own constraint, so a typo
+    # gets a sentence naming the three roles instead of an asyncpg
+    # IntegrityError from four frames down.
+    if role not in tuple(Role):
+        allowed = ", ".join(sorted(Role))
+        sys.exit(f"OPERATOR_ROLE must be one of {allowed}, got {role!r}")
 
     async with db_session() as session:
         token = set_current_tenant(tenant_id)

@@ -1,7 +1,7 @@
 import re
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractContextManager
-from datetime import UTC, date, datetime
+from datetime import date
 from uuid import UUID
 
 import httpx
@@ -15,9 +15,7 @@ from app.core.passwords import hash_password
 from app.core.queue import get_arq_pool
 from app.main import app
 from app.models.operator import Operator
-from app.repositories.appointment import AppointmentRepository
 from app.repositories.operator import OperatorRepository
-from app.services.appointment import create_appointment
 from app.services.login_rate_limit import MAX_LOGIN_ATTEMPTS
 from tests.conftest import Seed
 
@@ -214,216 +212,46 @@ async def test_login_rate_limit_is_per_username(
     assert response.status_code == 303
 
 
-# --- access control ---
+# --- the old appointments page is gone ---
+# Its behaviour is not retested here, because it no longer exists: booking
+# rules live in tests/test_appointment_service.py and the CSRF, role and
+# tenant-isolation rules the page relied on are covered against the API the
+# operator dashboard actually calls, in tests/test_admin_api.py.
 
 
-async def test_dashboard_without_session_redirects_to_login(client: httpx.AsyncClient) -> None:
-    response = await client.get("/dashboard/appointments", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "/login"
-
-
-async def test_dashboard_tampered_cookie_redirects_to_login(client: httpx.AsyncClient) -> None:
-    client.cookies.set("session", "not-a-real-signed-cookie")
-    response = await client.get("/dashboard/appointments", follow_redirects=False)
-    assert response.status_code == 303
-    assert response.headers["location"] == "/login"
-
-
-async def test_doctor_can_view_but_not_manage(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    seed: Seed,
-    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+@pytest.mark.parametrize(
+    "path",
+    ["/dashboard", "/dashboard/appointments", "/dashboard/appointments?date=2026-08-24"],
+)
+async def test_the_old_dashboard_paths_lead_to_the_operator_dashboard(
+    client: httpx.AsyncClient, path: str
 ) -> None:
-    await _create_operator(
-        db_session, as_tenant, seed.tenant_a.id, username="doc-a", password="pw", role="doctor"
-    )
-    await _login(client, "doc-a", "pw")
-
-    response = await client.get(f"/dashboard/appointments?date={BASE_DATE.isoformat()}")
-    assert response.status_code == 200
-    assert "Book an appointment" not in response.text
-    assert "csrf_token" not in response.text  # only rendered inside the manage-only forms
+    """Bookmarks and browser history outlive a refactor, so the paths stay
+    even though the page they served does not.
+    """
+    response = await client.get(path, follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/admin/"
 
 
-async def test_doctor_cannot_create_appointment(
+async def test_the_redirect_is_not_permanent(client: httpx.AsyncClient) -> None:
+    """301 would be cached by the browser indefinitely, so anything served
+    at /dashboard again later would need every operator to clear their
+    cache. Not a cost worth paying for one round trip on an internal route.
+    """
+    response = await client.get("/dashboard/appointments", follow_redirects=False)
+    assert response.status_code != 301
+
+
+async def test_booking_through_the_old_page_is_not_quietly_forwarded(
     client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    seed: Seed,
-    as_tenant: Callable[[UUID], AbstractContextManager[None]],
 ) -> None:
-    await _create_operator(
-        db_session, as_tenant, seed.tenant_a.id, username="doc-b", password="pw", role="doctor"
-    )
-    await _login(client, "doc-b", "pw")
-
+    """A form replayed from a stale page must fail rather than be pointed at
+    /api/admin/, which takes a different shape and its own CSRF token.
+    """
     response = await client.post(
         "/dashboard/appointments",
-        data={
-            "patient_name": "Ali",
-            "date": BASE_DATE.isoformat(),
-            "time": "09:00",
-            "csrf_token": "irrelevant-doctor-is-blocked-before-csrf-matters",
-        },
-    )
-    assert response.status_code == 403
-
-
-async def test_create_without_csrf_token_is_rejected(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    seed: Seed,
-    as_tenant: Callable[[UUID], AbstractContextManager[None]],
-) -> None:
-    await _create_operator(
-        db_session, as_tenant, seed.tenant_a.id, username="op-csrf", password="pw", role="operator"
-    )
-    await _login(client, "op-csrf", "pw")
-
-    response = await client.post(
-        "/dashboard/appointments",
-        data={
-            "patient_name": "Ali",
-            "date": BASE_DATE.isoformat(),
-            "time": "09:00",
-            "csrf_token": "wrong-token",
-        },
-    )
-    assert response.status_code == 403
-
-
-# --- day view + create + cancel, end to end ---
-
-
-async def test_operator_books_and_cancels_appointment(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    seed: Seed,
-    as_tenant: Callable[[UUID], AbstractContextManager[None]],
-) -> None:
-    await _create_operator(
-        db_session, as_tenant, seed.tenant_a.id, username="op-flow", password="pw", role="operator"
-    )
-    await _login(client, "op-flow", "pw")
-
-    day_page = await client.get(f"/dashboard/appointments?date={BASE_DATE.isoformat()}")
-    csrf_token = _extract_csrf(day_page.text)
-
-    create_response = await client.post(
-        "/dashboard/appointments",
-        data={
-            "patient_name": "Ali Valiyev",
-            "date": BASE_DATE.isoformat(),
-            "time": "09:00",
-            "csrf_token": csrf_token,
-        },
+        data={"patient_name": "Someone", "time": "10:00"},
         follow_redirects=False,
     )
-    assert create_response.status_code == 303
-    assert (
-        create_response.headers["location"]
-        == f"/dashboard/appointments?date={BASE_DATE.isoformat()}"
-    )
-
-    after_create = await client.get(f"/dashboard/appointments?date={BASE_DATE.isoformat()}")
-    assert "09:00" in after_create.text
-    assert "Ali Valiyev" in after_create.text
-
-    with as_tenant(seed.tenant_a.id):
-        booked = await AppointmentRepository(db_session).get_active_at(
-            datetime(2026, 9, 2, 4, 0, tzinfo=UTC)
-        )
-    assert booked is not None
-    assert booked.status == "scheduled"
-
-    cancel_response = await client.post(
-        f"/dashboard/appointments/{booked.id}/cancel",
-        data={"date": BASE_DATE.isoformat(), "csrf_token": csrf_token},
-        follow_redirects=False,
-    )
-    assert cancel_response.status_code == 303
-
-    with as_tenant(seed.tenant_a.id):
-        cancelled = await AppointmentRepository(db_session).get(booked.id)
-    assert cancelled is not None
-    assert cancelled.status == "cancelled"
-
-
-async def test_create_appointment_rejects_taken_slot(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    seed: Seed,
-    as_tenant: Callable[[UUID], AbstractContextManager[None]],
-) -> None:
-    with as_tenant(seed.tenant_a.id):
-        await create_appointment(
-            AppointmentRepository(db_session),
-            scheduled_at=datetime(2026, 9, 2, 4, 30, tzinfo=UTC),
-            source="bot",
-            patient_name="Existing Patient",
-        )
-
-    await _create_operator(
-        db_session, as_tenant, seed.tenant_a.id, username="op-taken", password="pw", role="operator"
-    )
-    await _login(client, "op-taken", "pw")
-
-    day_page = await client.get(f"/dashboard/appointments?date={BASE_DATE.isoformat()}")
-    csrf_token = _extract_csrf(day_page.text)
-
-    response = await client.post(
-        "/dashboard/appointments",
-        data={
-            "patient_name": "New Patient",
-            "date": BASE_DATE.isoformat(),
-            "time": "09:30",
-            "csrf_token": csrf_token,
-        },
-        follow_redirects=True,
-    )
-    assert response.status_code == 200
-    assert "already booked" in response.text
-
-
-# --- tenant isolation ---
-
-
-async def test_operator_cannot_cancel_other_tenants_appointment(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    seed: Seed,
-    as_tenant: Callable[[UUID], AbstractContextManager[None]],
-) -> None:
-    with as_tenant(seed.tenant_b.id):
-        other_tenant_appt = await create_appointment(
-            AppointmentRepository(db_session),
-            scheduled_at=datetime(2026, 9, 2, 5, 0, tzinfo=UTC),
-            source="bot",
-            patient_name="Tenant B Patient",
-        )
-
-    await _create_operator(
-        db_session,
-        as_tenant,
-        seed.tenant_a.id,
-        username="op-isolated",
-        password="pw",
-        role="operator",
-    )
-    await _login(client, "op-isolated", "pw")
-
-    day_page = await client.get(f"/dashboard/appointments?date={BASE_DATE.isoformat()}")
-    assert "Tenant B Patient" not in day_page.text
-    csrf_token = _extract_csrf(day_page.text)
-
-    response = await client.post(
-        f"/dashboard/appointments/{other_tenant_appt.id}/cancel",
-        data={"date": BASE_DATE.isoformat(), "csrf_token": csrf_token},
-    )
-    assert response.status_code == 404
-
-    with as_tenant(seed.tenant_b.id):
-        still_scheduled = await AppointmentRepository(db_session).get(other_tenant_appt.id)
-    assert still_scheduled is not None
-    assert still_scheduled.status == "scheduled"
+    assert response.status_code == 405

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin.deps import require_manage_role, verify_csrf_header
+from app.api.admin.deps import require_patient_access, verify_csrf_header
 from app.api.admin.schemas import (
     BotToggle,
     ConversationDetail,
@@ -174,7 +174,7 @@ async def get_conversation(
 async def set_bot_enabled(
     conversation_id: uuid.UUID,
     payload: BotToggle,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> ConversationSummary:
     """Hand the conversation to a human, or hand it back.
@@ -205,7 +205,7 @@ async def set_bot_enabled(
 async def reply_as_operator(
     conversation_id: uuid.UUID,
     payload: OperatorReply,
-    operator: Operator = Depends(require_manage_role),
+    operator: Operator = Depends(require_patient_access),
     session: AsyncSession = Depends(get_db_session),
 ) -> MessageOut:
     """Send a message to the patient as the clinic, over whichever channel

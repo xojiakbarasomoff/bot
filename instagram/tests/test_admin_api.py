@@ -14,6 +14,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.knowledge_base as knowledge_base_service
@@ -55,7 +56,7 @@ def _no_real_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
 async def manager(
     db_session: AsyncSession, seed: Seed, as_tenant: Callable[[UUID], AbstractContextManager[None]]
 ) -> Any:
-    """An operator on tenant A who may change things.
+    """An `admin` on tenant A: the account that may change the clinic itself.
 
     The seed fixture's own operator is a `doctor` — view-only by design, and
     exercised as such below — so anything testing a write needs its own
@@ -63,9 +64,28 @@ async def manager(
     """
     with as_tenant(seed.tenant_a.id):
         return await OperatorRepository(db_session).create(
-            name="Operator A",
-            role="operator",
+            name="Admin A",
+            role="admin",
             username=f"manager-{seed.tenant_a.id}",
+            password_hash="x",
+        )
+
+
+@pytest.fixture
+async def front_desk(
+    db_session: AsyncSession, seed: Seed, as_tenant: Callable[[UUID], AbstractContextManager[None]]
+) -> Any:
+    """An `operator` on tenant A: the front desk.
+
+    Separate from `manager` because the boundary between them is the point
+    of having three roles at all, and a boundary only one fixture ever
+    crosses is not being tested.
+    """
+    with as_tenant(seed.tenant_a.id):
+        return await OperatorRepository(db_session).create(
+            name="Front Desk A",
+            role="operator",
+            username=f"frontdesk-{seed.tenant_a.id}",
             password_hash="x",
         )
 
@@ -689,3 +709,89 @@ async def test_the_export_covers_only_this_clinic(
     response = await client.get(f"/api/admin/export/appointments.csv?date={local_day}")
 
     assert "Boshqa klinikaning bemori" not in response.text
+
+
+# --- the boundary between the three roles ----------------------------------
+
+
+async def test_the_front_desk_can_work_a_lead(
+    client: httpx.AsyncClient, seed: Seed, front_desk: Any
+) -> None:
+    """The front desk's own job. If this ever fails, the role has been
+    narrowed into uselessness and everyone will just be given `admin`.
+    """
+    csrf = _login_as(client, front_desk.id)
+
+    response = await client.post(
+        "/api/admin/leads",
+        json={"patient_name": "Nodira", "phone": "+998901112233", "topic": "Implant"},
+        headers={CSRF_HEADER: csrf},
+    )
+
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "payload"),
+    [
+        ("post", "/api/admin/doctors", {"name": "Dr. New", "specialty": "Ortodont"}),
+        ("post", "/api/admin/knowledge-base", {"question": "Narx?", "answer": "3 000 000"}),
+        ("patch", "/api/admin/settings", {"clinic_address": "Yangi manzil"}),
+    ],
+)
+async def test_the_front_desk_cannot_change_what_the_clinic_says(
+    client: httpx.AsyncClient,
+    seed: Seed,
+    front_desk: Any,
+    method: str,
+    path: str,
+    payload: dict[str, Any],
+) -> None:
+    """A wrong answer in the knowledge base is quoted to every patient who
+    asks, by a bot, with nobody reading it first — so editing it is not part
+    of a front-desk shift.
+    """
+    csrf = _login_as(client, front_desk.id)
+
+    response = await getattr(client, method)(path, json=payload, headers={CSRF_HEADER: csrf})
+
+    assert response.status_code == 403
+
+
+async def test_a_role_nobody_defined_cannot_be_stored_at_all(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """The regression this whole change exists for, caught one layer lower
+    than expected.
+
+    Under the previous check (`if role == "doctor": deny`) an account with
+    any other role held every right over the clinic, so a typo was an
+    administrator. The permission layer now refuses an unknown role
+    (tests/test_roles.py), and the table refuses to hold one in the first
+    place — so this cannot be written through a script or a psql session
+    either, which is where such a value would realistically come from.
+    """
+    with as_tenant(seed.tenant_a.id), pytest.raises(IntegrityError, match="ck_operators_role"):
+        await OperatorRepository(db_session).create(
+            name="Typo",
+            role="operatr",
+            username=f"typo-{seed.tenant_a.id}",
+            password_hash="x",
+        )
+    await db_session.rollback()
+
+
+async def test_the_csv_of_patient_names_and_phones_is_not_open_to_every_account(
+    client: httpx.AsyncClient, seed: Seed
+) -> None:
+    """The export carries patient names and phone numbers out of the
+    building, so it is gated as patient data rather than as a report. The
+    seed operator is a `doctor`.
+    """
+    _login_as(client, seed.a.operator.id)
+
+    response = await client.get("/api/admin/export/appointments.csv")
+
+    assert response.status_code == 403

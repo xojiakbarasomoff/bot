@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.admin.schemas import SessionInfo
 from app.api.auth import get_current_operator, get_current_session
 from app.core.db import get_db_session
+from app.core.roles import permissions_for
 from app.core.session import Session
 from app.core.tenant_context import get_current_tenant
 from app.models.operator import Operator
@@ -36,6 +37,9 @@ async def current_session(
         operator_id=operator.id,
         name=operator.name,
         role=operator.role,
+        # Sorted so the payload is stable between requests — an unordered
+        # set would otherwise make every response look different.
+        permissions=sorted(permissions_for(operator.role)),
         tenant_id=tenant.id,
         tenant_name=tenant.name,
         csrf_token=session.csrf_token,
