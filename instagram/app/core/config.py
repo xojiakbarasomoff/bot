@@ -192,6 +192,30 @@ class Settings(BaseSettings):
     # OpenAI-compatible, which is what lets Qwen be reached through the same
     # client as OpenAI rather than through a third SDK.
     hf_token: str | None = Field(default=None, alias="HF_TOKEN")
+
+    # --- the clinic's own spreadsheet ---------------------------------------
+    #
+    # Clinic owners do not open dashboards. They open the sheet they already
+    # keep, so the leads have to arrive there too. This is a mirror, never a
+    # source: nothing is ever read back, and losing the sheet loses nothing
+    # the database does not still hold.
+    #
+    # The whole service-account JSON, as one value. It has embedded newlines
+    # inside private_key, which a KEY=value file cannot carry — so it is
+    # accepted either verbatim or base64-encoded, whichever the host makes
+    # easier to paste.
+    google_service_account_json: str | None = Field(
+        default=None, alias="GOOGLE_SERVICE_ACCOUNT_JSON"
+    )
+    # The id out of the sheet's URL: docs.google.com/spreadsheets/d/<id>/edit.
+    # Unset, the whole mirror is off and nothing is attempted.
+    google_sheets_spreadsheet_id: str | None = Field(
+        default=None, alias="GOOGLE_SHEETS_SPREADSHEET_ID"
+    )
+    # The tab within it. One tab for both channels, with a column saying
+    # which one a lead came from — that is the sheet the clinic asked for,
+    # and splitting it in two would make "how many leads this week" a sum.
+    google_sheets_worksheet: str = Field(default="Lidlar", alias="GOOGLE_SHEETS_WORKSHEET")
     qwen_model: str = Field(default="Qwen/Qwen3-235B-A22B-Instruct-2507", alias="QWEN_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")

@@ -14,6 +14,9 @@ dependencies = [
     "arq>=0.26",
     "openai>=1.50",
     "google-genai>=1.0",
+    # Declared rather than leaned on: google-genai already pulls it in, and
+    # app.services.sheets would break silently the day that stops being true.
+    "google-auth>=2.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "httpx>=0.27",
@@ -82,6 +85,7 @@ target-version = ["py312"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

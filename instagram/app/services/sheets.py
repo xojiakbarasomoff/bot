@@ -1,0 +1,310 @@
+"""Mirroring leads into the clinic's own Google Sheet.
+
+The people who own these clinics do not open dashboards. They open the
+spreadsheet they already keep, and a lead that is only in a dashboard is,
+to them, a lead nobody told them about. So every patient the bots talk to
+lands in a sheet with four columns the owner asked for:
+
+    ism familiya | telefon | manba | bemor haqida qisqacha
+
+A mirror, never a source. Nothing is read back into the application, and a
+deleted, renamed or broken sheet loses nothing the database does not still
+hold -- which is what makes it safe for every failure here to be swallowed
+rather than retried into the patient's face.
+
+One tab for both channels, with the source column saying which. Two tabs
+was the other reading of the request, and it makes "how many leads this
+week" a sum the owner has to do by hand.
+
+Google's REST API directly, over the httpx client this project already
+uses, with google-auth for the token. gspread and google-api-python-client
+each bring a stack of transitive dependencies to wrap two endpoints
+(values.append and values.update), and one of those endpoints is the whole
+integration.
+"""
+
+import base64
+import binascii
+import json
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any, cast
+
+import google.auth.transport.requests as google_requests
+import httpx
+from google.oauth2 import service_account
+
+from app.core.config import Settings, get_settings
+from app.services.conversation_signals import looks_like_a_phone_number
+
+logger = logging.getLogger(__name__)
+
+SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
+SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
+
+# The header the clinic reads. Written once, when the tab is empty, and
+# never rewritten: an owner who renames a column has renamed it on purpose.
+HEADER = ("Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+
+# Enough for a sentence about a toothache, short enough that the column
+# stays readable in a spreadsheet without anyone widening it.
+MAX_COMMENT = 180
+
+# Bounded so a slow Google never becomes a slow reply. This runs after the
+# patient has already been answered, but it still holds a worker slot.
+TIMEOUT_SECONDS = 20.0
+
+
+class SheetsError(Exception):
+    """Raised when the sheet cannot be written. Never reaches a patient."""
+
+
+@dataclass(frozen=True)
+class LeadRow:
+    """One patient, as the clinic's owner reads them."""
+
+    name: str | None
+    phone: str | None
+    source: str
+    comment: str | None
+
+    def as_cells(self) -> list[str]:
+        comment = (self.comment or "").strip().replace("\n", " ")
+        if len(comment) > MAX_COMMENT:
+            comment = comment[: MAX_COMMENT - 1].rstrip() + "…"
+        return [self.name or "", self.phone or "", self.source, comment]
+
+
+def _load_credentials(raw: str) -> service_account.Credentials:
+    """The service-account key, given verbatim or base64-encoded.
+
+    Both, because the key's private_key field contains newlines and whether
+    a host can carry those in an environment variable varies -- Railway can,
+    a .env file read line by line cannot. Guessing between the two costs one
+    try/except and removes a class of "it works locally" bug.
+    """
+    text = raw.strip()
+    if not text.startswith("{"):
+        try:
+            text = base64.b64decode(text, validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise SheetsError("GOOGLE_SERVICE_ACCOUNT_JSON is neither JSON nor base64") from exc
+    try:
+        info = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SheetsError(f"GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON: {exc}") from exc
+    try:
+        # google-auth ships without complete annotations, so this reads as
+        # an untyped call under --strict. Silenced at the call rather than
+        # for the module, so the rest of this file stays fully checked.
+        credentials = service_account.Credentials.from_service_account_info(  # type: ignore[no-untyped-call]
+            info, scopes=list(SCOPES)
+        )
+        return cast("service_account.Credentials", credentials)
+    except Exception as exc:  # noqa: BLE001 - google's message names the missing field
+        raise SheetsError(f"Not a usable service account key: {exc}") from exc
+
+
+class SheetsMirror:
+    """Appends leads to one worksheet of one spreadsheet."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        resolved = settings or get_settings()
+        if resolved.google_service_account_json is None or (
+            resolved.google_sheets_spreadsheet_id is None
+        ):
+            raise SheetsError(
+                "GOOGLE_SERVICE_ACCOUNT_JSON and GOOGLE_SHEETS_SPREADSHEET_ID are both required"
+            )
+        self._credentials = _load_credentials(resolved.google_service_account_json)
+        self._spreadsheet_id = resolved.google_sheets_spreadsheet_id
+        self._worksheet = resolved.google_sheets_worksheet
+
+    def _token(self) -> str:
+        # google-auth refreshes only when the current token is close to
+        # expiry, so this is a cheap call on all but the first use.
+        if not self._credentials.valid:
+            self._credentials.refresh(google_requests.Request())  # type: ignore[no-untyped-call]
+        token = self._credentials.token
+        if not isinstance(token, str):  # pragma: no cover - defensive
+            raise SheetsError("Google returned no access token")
+        return token
+
+    async def _call(
+        self, client: httpx.AsyncClient, method: str, path: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        response = await client.request(
+            method,
+            f"{SHEETS_API}/{self._spreadsheet_id}{path}",
+            headers={"Authorization": f"Bearer {self._token()}"},
+            **kwargs,
+        )
+        if response.is_error:
+            # The body names the tab or the id that was wrong, which is the
+            # whole diagnostic value; it carries no credential.
+            raise SheetsError(f"Sheets API {response.status_code}: {response.text[:300]}")
+        body: dict[str, Any] = response.json()
+        return body
+
+    async def ensure_header(self, client: httpx.AsyncClient) -> None:
+        """Write the column names, but only into an empty tab.
+
+        Checked rather than assumed: rewriting row 1 on every deploy would
+        undo an owner who renamed a column, and they renamed it because the
+        sheet is theirs.
+        """
+        existing = await self._call(
+            client, "GET", f"/values/{self._worksheet}!A1:D1", params={"majorDimension": "ROWS"}
+        )
+        if existing.get("values"):
+            return
+        await self._call(
+            client,
+            "PUT",
+            f"/values/{self._worksheet}!A1:D1",
+            params={"valueInputOption": "RAW"},
+            json={"values": [list(HEADER)]},
+        )
+
+    async def append(self, client: httpx.AsyncClient, row: LeadRow) -> None:
+        await self._call(
+            client,
+            "POST",
+            f"/values/{self._worksheet}!A:D:append",
+            params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
+            json={"values": [row.as_cells()]},
+        )
+
+    async def update_row(self, client: httpx.AsyncClient, row_number: int, row: LeadRow) -> None:
+        """Rewrite one row in place, for a patient the clinic already has.
+
+        A name or a phone usually arrives a few turns after the first
+        message. Appending again would give the owner the same person twice,
+        once without their number.
+        """
+        await self._call(
+            client,
+            "PUT",
+            f"/values/{self._worksheet}!A{row_number}:D{row_number}",
+            params={"valueInputOption": "RAW"},
+            json={"values": [row.as_cells()]},
+        )
+
+    async def find_row(self, client: httpx.AsyncClient, key: str) -> int | None:
+        """The 1-based row holding `key` in the phone column, if any.
+
+        Reading the column rather than remembering a row number, because the
+        sheet is the owner's: they sort it, they insert a line, they delete
+        somebody. A row number stored on our side would be pointing at a
+        stranger by Thursday.
+        """
+        if not key:
+            return None
+        body = await self._call(
+            client, "GET", f"/values/{self._worksheet}!B:B", params={"majorDimension": "COLUMNS"}
+        )
+        columns = body.get("values") or [[]]
+        for index, value in enumerate(columns[0], start=1):
+            if str(value).strip() == key:
+                return index
+        return None
+
+    async def upsert(self, row: LeadRow) -> None:
+        """Put this lead in the sheet, once."""
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            await self.ensure_header(client)
+            existing = await self.find_row(client, row.phone or "")
+            if existing is not None:
+                await self.update_row(client, existing, row)
+                return
+            await self.append(client, row)
+
+
+@lru_cache
+def get_mirror() -> SheetsMirror | None:
+    """The configured mirror, or None when the clinic has no sheet.
+
+    Cached because building it parses the key and sets up a credentials
+    object; the token inside refreshes itself.
+    """
+    settings = get_settings()
+    if settings.google_sheets_spreadsheet_id is None:
+        return None
+    try:
+        return SheetsMirror(settings)
+    except SheetsError:
+        logger.exception("sheets_disabled_bad_configuration")
+        return None
+
+
+async def mirror_lead(row: LeadRow) -> None:
+    """Send one lead to the clinic's sheet, if there is one.
+
+    Never raises. The patient has already been answered by the time this
+    runs, and the row is already in the database — a spreadsheet that is
+    briefly behind is not worth failing a job over, and a retry would
+    duplicate the reply, not the row.
+    """
+    mirror = get_mirror()
+    if mirror is None:
+        return
+    try:
+        await mirror.upsert(row)
+    except SheetsError as exc:
+        logger.error("sheets_mirror_failed error=%s", exc)
+    except Exception:
+        logger.exception("sheets_mirror_failed")
+
+
+# Openings, acknowledgements and bare numbers — the messages that say
+# nothing about why the patient wrote. Matched as whole words against a
+# stripped message, so "salom" is skipped and "salom, tishim og'riyapti" is
+# not.
+_SMALL_TALK = frozenset(
+    {
+        "salom",
+        "assalom",
+        "assalomu",
+        "alaykum",
+        "assalomu alaykum",
+        "assalom alaykum",
+        "ассалому алайкум",
+        "салом",
+        "здравствуйте",
+        "привет",
+        "hi",
+        "hello",
+        "ok",
+        "ha",
+        "yoq",
+        "rahmat",
+        "спасибо",
+        "/start",
+    }
+)
+
+
+def summarise_problem(patient_messages: Sequence[str]) -> str:
+    """One line saying what this patient wrote in about.
+
+    Their own words, not a generated summary. A summary would mean another
+    model call per lead, and this deployment's daily allowance is better
+    spent answering patients than describing them — and the patient's own
+    "tishim og'riyapti, chap tomonda" is more useful to a clinic than
+    anything a paraphrase would produce.
+
+    The longest message that is not a greeting or a phone number: length is
+    a decent proxy for "the one where they explained", and the alternative
+    (the first such message) picks up "narxi qancha?" and misses the
+    sentence after it.
+    """
+    candidates = [
+        text.strip()
+        for text in patient_messages
+        if text.strip()
+        and text.strip().lower().strip("!?.,") not in _SMALL_TALK
+        and not looks_like_a_phone_number(text)
+    ]
+    return max(candidates, key=len, default="")

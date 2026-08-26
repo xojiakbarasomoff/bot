@@ -28,6 +28,7 @@ from app.core.db import db_session
 from app.core.logging import configure_logging
 from app.core.redaction import preview
 from app.core.tenant_context import reset_current_tenant, set_current_tenant
+from app.models.appointment import Appointment
 from app.models.channel import Channel
 from app.models.conversation import Conversation
 from app.rag.embeddings import EmbeddingProvider
@@ -40,9 +41,11 @@ from app.services.conversation import (
     last_inbound_at,
     record_outbound_message,
 )
+from app.services.conversation_signals import find_phone_number
 from app.services.debounce import join_messages, pop_batch_if_current_generation
 from app.services.delivery import send_reply
 from app.services.reminders import send_due_reminders
+from app.services.sheets import LeadRow, mirror_lead, summarise_problem
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +107,11 @@ async def process_inbound_message(
             # the same place as the rest of this task's transaction.
             conversation = await session.get(Conversation, conversation_uuid)
             channel = await session.get(Channel, uuid.UUID(channel_id))
+            # Bound before the branch: the spreadsheet mirror below reads it
+            # whether or not a booking happened, and a conversation the job
+            # cannot load would otherwise raise NameError there — after the
+            # patient has already been answered.
+            appointment: Appointment | None = None
             if conversation is not None:
                 reply, appointment = await settle_booking(
                     AppointmentRepository(session),
@@ -155,6 +163,31 @@ async def process_inbound_message(
                 reply_context=reply_context,
                 adapter=adapter,
             )
+
+            # The clinic's own spreadsheet, for the owners who never open a
+            # dashboard. Only when there is something worth a row -- a phone
+            # number the patient typed, or a booking -- because a row per
+            # message would be a page of the same person, and the sheet is
+            # keyed on the number.
+            #
+            # After delivery, and never allowed to fail the job: the patient
+            # has their answer and the row is already in the database, so a
+            # spreadsheet that is briefly behind costs nothing, while a retry
+            # would send the reply twice.
+            patient_said = [turn["content"] for turn in history if turn["role"] == "user"]
+            patient_said.append(message_text)
+            phone = next(
+                (found for text in patient_said if (found := find_phone_number(text))), None
+            )
+            if phone or appointment is not None:
+                await mirror_lead(
+                    LeadRow(
+                        name=appointment.patient_name if appointment is not None else None,
+                        phone=phone,
+                        source=str(channel.type) if channel is not None else "bot",
+                        comment=summarise_problem(patient_said),
+                    )
+                )
 
             # Recorded only when it actually went out: a reply in the
             # transcript the patient never received would make the next

@@ -88,7 +88,18 @@ class ConversationSignals:
 
 
 def looks_like_a_phone_number(text: str) -> bool:
-    return bool(_PHONE.search(_SEPARATORS.sub("", text)))
+    return find_phone_number(text) is not None
+
+
+def find_phone_number(text: str) -> str | None:
+    """The number itself, normalised, or None.
+
+    Normalised because the same patient writes "+998 90 123 45 67" today and
+    "998901234567" next week, and the clinic's spreadsheet is keyed on this
+    string — two spellings would be two rows for one person.
+    """
+    match = _PHONE.search(_SEPARATORS.sub("", text))
+    return match.group(0) if match else None
 
 
 def read_signals(
