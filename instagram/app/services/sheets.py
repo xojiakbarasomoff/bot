@@ -57,6 +57,124 @@ MAX_COMMENT = 180
 TIMEOUT_SECONDS = 20.0
 
 
+# The look of a freshly created tab. Colours chosen for a document somebody
+# reads on a phone between patients: one dark header that survives scrolling,
+# quiet banding so the eye keeps its place across four columns, and the
+# story column wide enough to hold a sentence.
+_HEADER_COLOUR = "#0F766E"
+_BAND_COLOUR = "#F1F5F9"
+_COLUMN_WIDTHS = (220, 170, 130, 560)
+
+
+def _rgb(value: str) -> dict[str, float]:
+    raw = value.lstrip("#")
+    return {
+        "red": int(raw[0:2], 16) / 255,
+        "green": int(raw[2:4], 16) / 255,
+        "blue": int(raw[4:6], 16) / 255,
+    }
+
+
+def _style_requests(sheet_id: int) -> list[dict[str, Any]]:
+    white = {"red": 1.0, "green": 1.0, "blue": 1.0}
+    ink = _rgb("#1F2937")
+    full = {"sheetId": sheet_id, "startColumnIndex": 0, "endColumnIndex": len(HEADER)}
+    requests: list[dict[str, Any]] = [
+        # The header stays in view through a year of leads.
+        {
+            "updateSheetProperties": {
+                "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {**full, "startRowIndex": 0, "endRowIndex": 1},
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": _rgb(_HEADER_COLOUR),
+                        "textFormat": {"foregroundColor": white, "bold": True, "fontSize": 11},
+                        "verticalAlignment": "MIDDLE",
+                        "horizontalAlignment": "LEFT",
+                        "padding": {"left": 10, "right": 10, "top": 6, "bottom": 6},
+                    }
+                },
+                "fields": (
+                    "userEnteredFormat(backgroundColor,textFormat,verticalAlignment,"
+                    "horizontalAlignment,padding)"
+                ),
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
+                "properties": {"pixelSize": 40},
+                "fields": "pixelSize",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {**full, "startRowIndex": 1},
+                "cell": {
+                    "userEnteredFormat": {
+                        # Without this the story runs on under the next
+                        # column and the owner reads half a sentence.
+                        "wrapStrategy": "WRAP",
+                        "verticalAlignment": "MIDDLE",
+                        "textFormat": {"foregroundColor": ink, "fontSize": 10},
+                        "padding": {"left": 10, "right": 10, "top": 6, "bottom": 6},
+                    }
+                },
+                "fields": "userEnteredFormat(wrapStrategy,verticalAlignment,textFormat,padding)",
+            }
+        },
+        {
+            "repeatCell": {
+                # A phone number is a label, not a quantity. Left as a number
+                # it loses a leading zero and renders as 9.989E+11.
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1,
+                    "startColumnIndex": 1,
+                    "endColumnIndex": 2,
+                },
+                "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
+                "fields": "userEnteredFormat.numberFormat",
+            }
+        },
+        {
+            "addBanding": {
+                "bandedRange": {
+                    "range": {**full, "startRowIndex": 1},
+                    "rowProperties": {
+                        "firstBandColor": white,
+                        "secondBandColor": _rgb(_BAND_COLOUR),
+                    },
+                }
+            }
+        },
+        # So the owner can keep only this week's Telegram leads without
+        # asking anyone how.
+        {"setBasicFilter": {"filter": {"range": {**full, "startRowIndex": 0}}}},
+    ]
+    requests.extend(
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": index,
+                    "endIndex": index + 1,
+                },
+                "properties": {"pixelSize": width},
+                "fields": "pixelSize",
+            }
+        }
+        for index, width in enumerate(_COLUMN_WIDTHS)
+    )
+    return requests
+
+
 class SheetsError(Exception):
     """Raised when the sheet cannot be written. Never reaches a patient."""
 
@@ -167,6 +285,46 @@ class SheetsMirror:
             params={"valueInputOption": "RAW"},
             json={"values": [list(HEADER)]},
         )
+        await self._style_new_sheet(client)
+
+    async def _style_new_sheet(self, client: httpx.AsyncClient) -> None:
+        """Make the tab readable, once, at the moment it is created.
+
+        A default Sheets tab is four unlabelled columns of grey — the owner
+        opens it, cannot tell the phone from the source at a glance, and goes
+        back to asking somebody. Since this sheet exists precisely because
+        they will not use a dashboard, looking like one thing they will use
+        is not decoration.
+
+        Applied only on the same condition as the header: the tab was empty.
+        Re-applying on every deploy would undo an owner who widened a column
+        or picked their own colour, and they did that because it is their
+        sheet.
+
+        Failures here are swallowed. A tab that works but looks plain is a
+        far better outcome than a lead that was not written because styling
+        it went wrong.
+        """
+        gid = await self._worksheet_id(client)
+        if gid is None:
+            return
+        try:
+            await self._call(
+                client, "POST", ":batchUpdate", json={"requests": _style_requests(gid)}
+            )
+        except SheetsError as exc:
+            logger.warning("sheets_styling_skipped error=%s", exc)
+
+    async def _worksheet_id(self, client: httpx.AsyncClient) -> int | None:
+        body = await self._call(
+            client, "GET", "", params={"fields": "sheets.properties(sheetId,title)"}
+        )
+        for sheet in body.get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("title") == self._worksheet:
+                sheet_id: int = properties["sheetId"]
+                return sheet_id
+        return None
 
     async def append(self, client: httpx.AsyncClient, row: LeadRow) -> None:
         await self._call(

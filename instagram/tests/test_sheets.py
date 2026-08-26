@@ -20,6 +20,7 @@ from app.services.sheets import (
     SheetsError,
     SheetsMirror,
     _load_credentials,
+    _style_requests,
     mirror_lead,
     summarise_problem,
 )
@@ -141,7 +142,10 @@ async def test_a_new_lead_is_appended_under_a_header_written_once() -> None:
         await mirror.append(client, LeadRow("N", "998901234567", "telegram", "tish"))
 
     methods = [method for method, _ in seen]
-    assert methods == ["GET", "PUT", "POST"]
+    # GET the header row, PUT it, GET the sheet ids, POST the styling,
+    # POST the row itself.
+    assert methods[:2] == ["GET", "PUT"]
+    assert methods[-1] == "POST"
 
 
 async def test_a_tab_that_already_has_a_header_is_left_alone() -> None:
@@ -255,3 +259,71 @@ def test_a_base64_key_is_accepted_because_a_dotenv_cannot_hold_newlines() -> Non
 def test_a_key_that_is_neither_json_nor_base64_says_so(raw: str) -> None:
     with pytest.raises(SheetsError):
         _load_credentials(raw)
+
+
+# --- how a new tab is laid out ----------------------------------------------
+
+
+def test_a_new_tab_is_made_readable_rather_than_left_as_grey_columns() -> None:
+    """This sheet exists because the owner will not open a dashboard, so
+    looking like something they will read is not decoration.
+    """
+    kinds = [next(iter(request)) for request in _style_requests(0)]
+
+    assert "updateSheetProperties" in kinds  # frozen header
+    assert "addBanding" in kinds
+    assert "setBasicFilter" in kinds
+    assert kinds.count("updateDimensionProperties") == 1 + len(HEADER)  # row + columns
+
+
+def test_the_phone_column_is_text_so_it_is_not_shown_as_9_989e_11() -> None:
+    formats = [
+        request["repeatCell"]
+        for request in _style_requests(0)
+        if "repeatCell" in request and "numberFormat" in request["repeatCell"]["fields"]
+    ]
+
+    assert len(formats) == 1
+    assert formats[0]["range"]["startColumnIndex"] == 1
+    assert formats[0]["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "TEXT"
+
+
+def test_the_story_column_wraps_instead_of_running_under_the_next_one() -> None:
+    wrapping = [
+        request["repeatCell"]
+        for request in _style_requests(0)
+        if "repeatCell" in request
+        and request["repeatCell"]["cell"]["userEnteredFormat"].get("wrapStrategy") == "WRAP"
+    ]
+
+    assert wrapping
+
+
+async def test_styling_a_tab_never_costs_the_clinic_a_lead(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A tab that works but looks plain is a far better outcome than a lead
+    that was not written because the decoration failed.
+    """
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if request.method == "GET" and "!A1:D1" in str(request.url):
+            return httpx.Response(200, json={})
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 0, "title": "Lidlar"}}]}
+            )
+        if str(request.url).endswith(":batchUpdate"):
+            return httpx.Response(500, text="styling exploded")
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with caplog.at_level("WARNING", logger="app"):
+            await mirror.ensure_header(client)
+        await mirror.append(client, LeadRow("N", "1", "telegram", "x"))
+
+    assert "sheets_styling_skipped" in caplog.text
+    assert calls[-1] == "POST"  # the row still went in
