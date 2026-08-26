@@ -115,8 +115,26 @@
 
     <div class="panel">
       <h2>Qabullar</h2>
+      <div class="row" id="views-appointments" style="margin-bottom:10px;gap:6px;flex-wrap:wrap"></div>
       <div class="row" style="margin-bottom:14px">
         <input type="date" id="apptDate" style="width:auto">
+        <select id="apptDays" style="width:auto">
+          <option value="1">Shu kun</option>
+          <option value="7">7 kun</option>
+          <option value="30">30 kun</option>
+        </select>
+        <select id="apptSource" style="width:auto">
+          <option value="">Barcha manbalar</option>
+          <option value="telegram">Telegram</option>
+          <option value="instagram">Instagram</option>
+          <option value="operator">Operator</option>
+        </select>
+        <select id="apptStatus" style="width:auto">
+          <option value="">Barcha holatlar</option>
+          <option value="scheduled">Rejalashtirilgan</option>
+          <option value="confirmed">Tasdiqlangan</option>
+          <option value="cancelled">Bekor qilingan</option>
+        </select>
         <button class="act" id="apptReload">Ko'rsatish</button>
         <a class="act" id="apptExport" style="text-decoration:none;padding:6px 10px">CSV yuklab olish</a>
       </div>
@@ -139,6 +157,7 @@
   <section id="tab-chats" hidden>
     <div class="panel">
       <h2>Suhbatlar</h2>
+      <div class="row" id="views-conversations" style="margin-bottom:10px;gap:6px;flex-wrap:wrap"></div>
       <div class="scroll"><table>
         <thead><tr><th>Bemor</th><th>Kanal</th><th>Oxirgi xabar</th><th>Bot</th><th></th></tr></thead>
         <tbody id="chatRows"></tbody>
@@ -158,6 +177,7 @@
   <section id="tab-leads" hidden>
     <div class="panel">
       <h2>Lidlar</h2>
+      <div class="row" id="views-leads" style="margin-bottom:10px;gap:6px;flex-wrap:wrap"></div>
       <div class="scroll"><table>
         <thead><tr><th>Bemor</th><th>Telefon</th><th>Mavzu</th><th>Qulay vaqt</th><th>Holat</th><th></th></tr></thead>
         <tbody id="leadRows"></tbody>
@@ -366,10 +386,40 @@ async function loadStats() {
   );
 }
 
+// The controls a list is showing right now, in the shape the API takes —
+// which is also exactly what gets saved. A saved view and a person clicking
+// the controls therefore produce the same request; there is no second path.
+function currentParams(resource) {
+  if (resource === "appointments") {
+    return dropEmpty({
+      date: document.getElementById("apptDate").value || today(),
+      days: document.getElementById("apptDays").value,
+      source: document.getElementById("apptSource").value,
+      status: document.getElementById("apptStatus").value,
+    });
+  }
+  return {};
+}
+
+function dropEmpty(params) {
+  return Object.fromEntries(Object.entries(params).filter(([, v]) => v !== "" && v != null));
+}
+
+function applyParams(resource, params) {
+  if (resource !== "appointments") return;
+  // A saved view that predates a control leaves it alone rather than
+  // blanking it, so an old view never silently widens what is shown.
+  for (const [id, key] of [["apptDate", "date"], ["apptDays", "days"],
+                           ["apptSource", "source"], ["apptStatus", "status"]]) {
+    if (key in params) document.getElementById(id).value = params[key];
+  }
+}
+
 async function loadAppointments() {
-  const date = document.getElementById("apptDate").value || today();
-  document.getElementById("apptExport").href = `${API}/export/appointments.csv?date=${date}`;
-  const rows = await api(`/appointments?date=${date}`);
+  const params = currentParams("appointments");
+  const query = new URLSearchParams(params).toString();
+  document.getElementById("apptExport").href = `${API}/export/appointments.csv?date=${params.date}`;
+  const rows = await api(`/appointments?${query}`);
   fill("apptRows", rows.map((a) =>
     el("tr", {},
       el("td", {}, localTime(a.scheduled_at)),
@@ -401,7 +451,7 @@ async function act(path, message) {
 // --- conversations -------------------------------------------------------
 
 async function loadChats() {
-  const rows = await api("/conversations");
+  const rows = await api("/conversations?" + new URLSearchParams(LIST_PARAMS.conversations));
   fill("chatRows", rows.map((c) =>
     el("tr", {},
       el("td", {}, c.patient_name || c.patient_external_id),
@@ -449,7 +499,7 @@ async function openThread(id) {
 const LEAD_STATUSES = { new: "yangi", contacted: "bog'lanildi", booked: "qabulga yozildi", cancelled: "bekor qilindi" };
 
 async function loadLeads() {
-  const rows = await api("/leads");
+  const rows = await api("/leads?" + new URLSearchParams(LIST_PARAMS.leads));
   fill("leadRows", rows.map((l) =>
     el("tr", {},
       el("td", {}, l.patient_name || "—"),
@@ -704,8 +754,84 @@ function applyPermissions() {
   }
 }
 
+// --- saved views ---------------------------------------------------------
+// A clinic's own named questions about its data: "Bugungi Telegram
+// qabullari", "Javobsiz lidlar". Stored server-side as query parameters for
+// a list that already exists, so clicking one is the same request the
+// controls make.
+
+let SAVED_VIEWS = [];
+// Lists whose controls do not live in the page yet still carry parameters —
+// a saved view sets these, the loaders send them.
+const LIST_PARAMS = { conversations: {}, leads: {} };
+
+async function loadViews() {
+  SAVED_VIEWS = await api("/filters");
+  renderViews();
+}
+
+function renderViews() {
+  for (const resource of ["appointments", "conversations", "leads"]) {
+    const holder = document.getElementById("views-" + resource);
+    if (!holder) continue;
+    const mine = SAVED_VIEWS.filter((v) => v.resource === resource);
+    const chips = mine.map((view) =>
+      el("span", { class: "row", style: "gap:2px" },
+        el("button", { class: "act", onclick: () => applyView(view) }, view.name),
+        canManageClinic()
+          ? el("button", {
+              class: "act danger",
+              title: "Ko'rinishni o'chirish",
+              onclick: () => removeView(view),
+            }, "×")
+          : null)
+    );
+    if (canManageClinic()) {
+      chips.push(el("button", { class: "act primary", onclick: () => saveView(resource) }, "+ Saqlash"));
+    }
+    if (!chips.length) {
+      chips.push(el("span", { class: "muted" }, "Saqlangan ko'rinish yo'q"));
+    }
+    holder.replaceChildren(...chips);
+  }
+}
+
+async function applyView(view) {
+  if (view.resource === "appointments") {
+    applyParams("appointments", view.params);
+    await loadAppointments();
+  } else {
+    LIST_PARAMS[view.resource] = view.params;
+    await (view.resource === "leads" ? loadLeads() : loadChats());
+  }
+  toast(`"${view.name}" qo'llandi`);
+}
+
+async function saveView(resource) {
+  const name = prompt("Bu ko'rinishga nom bering:");
+  if (!name) return;
+  const params = resource === "appointments" ? currentParams(resource) : LIST_PARAMS[resource];
+  try {
+    await api("/filters", { method: "POST", body: { resource, name, params } });
+    toast("Ko'rinish saqlandi");
+    await loadViews();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function removeView(view) {
+  if (!confirm(`"${view.name}" o'chirilsinmi?`)) return;
+  try {
+    await api("/filters/" + view.id, { method: "DELETE" });
+    await loadViews();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 const LOADERS = {
-  today: () => Promise.all([loadStats(), loadAppointments(), loadDoctors()]),
+  today: () => Promise.all([loadStats(), loadAppointments(), loadDoctors(), loadViews()]),
   chats: loadChats,
   leads: loadLeads,
   doctors: loadDoctors,
@@ -752,6 +878,7 @@ document.getElementById("staffForm").addEventListener("submit", async (e) => {
     ROLE = me.role;
     PERMISSIONS = new Set(me.permissions || []);
     applyPermissions();
+    await loadViews();
     document.getElementById("whoami").textContent = `${me.name} · ${me.role} · ${me.tenant_name}`;
     await LOADERS.today();
   } catch (err) {

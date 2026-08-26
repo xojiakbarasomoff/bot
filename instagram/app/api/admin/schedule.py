@@ -72,10 +72,26 @@ async def list_appointments(
     operator: Operator = Depends(get_current_operator),
     session: AsyncSession = Depends(get_db_session),
     day: date | None = Query(default=None, alias="date"),
+    days: int = Query(default=1, ge=1, le=92),
+    status_filter: str | None = Query(default=None, alias="status"),
+    source: str | None = Query(default=None),
 ) -> list[AppointmentOut]:
+    """One day by default, or a window, narrowed by status and by where the
+    booking came from.
+
+    Filtered after the range query rather than in it: the window is at most
+    a quarter and one clinic's day is tens of rows, so this is a list a
+    person could read, and two more WHERE clauses on a query that is already
+    bounded by time buys nothing worth a second index.
+    """
     selected = day or datetime.now(CLINIC_TIMEZONE).date()
-    start, end = _day_bounds_utc(selected)
+    start, _ = _day_bounds_utc(selected)
+    _, end = _day_bounds_utc(selected + timedelta(days=days - 1))
     appointments = await AppointmentRepository(session).list_between(start, end)
+    if status_filter:
+        appointments = [a for a in appointments if a.status == status_filter]
+    if source:
+        appointments = [a for a in appointments if a.source == source]
     return [_out(appointment) for appointment in appointments]
 
 
