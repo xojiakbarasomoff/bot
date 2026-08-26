@@ -105,6 +105,24 @@ def test_the_comment_is_what_the_patient_actually_wrote() -> None:
     assert summarise_problem(said) == "chap tomonda tishim og'riyapti, sovuqdan achishadi"
 
 
+def test_agreeing_to_a_time_is_not_the_reason_they_wrote() -> None:
+    """From a real conversation: taking the longest message filled the
+    clinic's column with "ha, shu vaqt to'g'ri keladi", because a
+    confirmation is wordier than the question under it. The first
+    substantive message cannot be agreement — nothing has been offered when
+    it arrives.
+    """
+    said = [
+        "Assalomu alaykum",
+        "implant qancha turadi?",
+        "qimmat ekan",
+        "mayli, qabulga yozing",
+        "ha, shu vaqt to'g'ri keladi",
+    ]
+
+    assert summarise_problem(said) == "implant qancha turadi?"
+
+
 @pytest.mark.parametrize(
     "said",
     [

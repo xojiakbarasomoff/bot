@@ -154,40 +154,54 @@ async def process_inbound_message(
             # conversation whose inbound row is somehow missing, where
             # refusing to reply would be the worse failure.
             patient_last_wrote = await last_inbound_at(session, conversation_uuid)
-            delivered_over = await send_reply(
-                session,
-                channel_id=uuid.UUID(channel_id),
-                recipient_external_id=sender_external_id,
-                text=reply,
-                last_user_message_at=patient_last_wrote or datetime.now(UTC),
-                reply_context=reply_context,
-                adapter=adapter,
-            )
 
             # The clinic's own spreadsheet, for the owners who never open a
             # dashboard. Only when there is something worth a row -- a phone
             # number the patient typed, or a booking -- because a row per
             # message would be a page of the same person, and the sheet is
             # keyed on the number.
-            #
-            # After delivery, and never allowed to fail the job: the patient
-            # has their answer and the row is already in the database, so a
-            # spreadsheet that is briefly behind costs nothing, while a retry
-            # would send the reply twice.
             patient_said = [turn["content"] for turn in history if turn["role"] == "user"]
             patient_said.append(message_text)
             phone = next(
                 (found for text in patient_said if (found := find_phone_number(text))), None
             )
-            if phone or appointment is not None:
-                await mirror_lead(
-                    LeadRow(
-                        name=appointment.patient_name if appointment is not None else None,
-                        phone=phone,
-                        source=str(channel.type) if channel is not None else "bot",
-                        comment=summarise_problem(patient_said),
-                    )
+            lead = (
+                LeadRow(
+                    name=appointment.patient_name if appointment is not None else None,
+                    phone=phone,
+                    source=str(channel.type) if channel is not None else "bot",
+                    comment=summarise_problem(patient_said),
                 )
+                if phone or appointment is not None
+                else None
+            )
+
+            try:
+                delivered_over = await send_reply(
+                    session,
+                    channel_id=uuid.UUID(channel_id),
+                    recipient_external_id=sender_external_id,
+                    text=reply,
+                    last_user_message_at=patient_last_wrote or datetime.now(UTC),
+                    reply_context=reply_context,
+                    adapter=adapter,
+                )
+            finally:
+                # In a finally, and after the send rather than before it, for
+                # two different reasons.
+                #
+                # After: writing to Google takes a round trip the patient
+                # would otherwise spend waiting for their answer.
+                #
+                # Regardless: a patient who left a number is a patient the
+                # clinic wants to ring, and a delivery that failed -- a
+                # blocked bot, an expired token, a closed messaging window --
+                # is the case where they want to ring them *most*. Skipping
+                # the row exactly then would lose the lead the reply could
+                # not reach. mirror_lead never raises, so this cannot mask
+                # the delivery error it runs beside.
+                if lead is not None:
+                    await mirror_lead(lead)
 
             # Recorded only when it actually went out: a reply in the
             # transcript the patient never received would make the next

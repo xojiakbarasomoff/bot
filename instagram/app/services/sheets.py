@@ -453,10 +453,21 @@ def summarise_problem(patient_messages: Sequence[str]) -> str:
     "tishim og'riyapti, chap tomonda" is more useful to a clinic than
     anything a paraphrase would produce.
 
-    The longest message that is not a greeting or a phone number: length is
-    a decent proxy for "the one where they explained", and the alternative
-    (the first such message) picks up "narxi qancha?" and misses the
-    sentence after it.
+    The first message that is not a greeting or a phone number, because that
+    is the one that says why they wrote.
+
+    It was the longest such message until a real conversation showed why
+    that fails: "ha, shu vaqt to'g'ri keladi" is longer than "implant
+    qancha turadi?", so the clinic's column filled with the patient
+    agreeing to a time instead of the reason they came. Confirmations and
+    logistics are reliably wordier than the question underneath them.
+
+    The first one cannot have that problem. Nothing has been offered yet
+    when it arrives, so it cannot be agreement to anything -- it is the
+    reason, every time. It sometimes costs a detail the patient added a
+    message later ("chap tomonda, sovuqdan achishadi"), and that is the
+    cheaper mistake: a column saying "implant qancha turadi?" is useful to
+    whoever rings them, and one saying "ha, shu vaqt to'g'ri keladi" is not.
     """
     candidates = [
         text.strip()
@@ -465,4 +476,4 @@ def summarise_problem(patient_messages: Sequence[str]) -> str:
         and text.strip().lower().strip("!?.,") not in _SMALL_TALK
         and not looks_like_a_phone_number(text)
     ]
-    return max(candidates, key=len, default="")
+    return candidates[0] if candidates else ""
