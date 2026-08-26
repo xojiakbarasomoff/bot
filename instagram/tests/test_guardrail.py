@@ -1,5 +1,7 @@
+import pytest
+
 from app.services.guardrail import (
-    EMERGENCY_RESPONSE,
+    EMERGENCY_RESPONSES,
     GuardrailCategory,
     KeywordGuardrailClassifier,
     evaluate_guardrail,
@@ -74,7 +76,7 @@ def test_classifies_ordinary_faq_style_message_as_none() -> None:
 def test_evaluate_guardrail_returns_fixed_response_for_emergency() -> None:
     result = evaluate_guardrail("I fainted and can't breathe")
     assert result.category is GuardrailCategory.EMERGENCY
-    assert result.fixed_response == EMERGENCY_RESPONSE
+    assert result.fixed_response == EMERGENCY_RESPONSES["uz-latn"]
 
 
 def test_evaluate_guardrail_returns_no_fixed_response_for_medical_advice() -> None:
@@ -87,3 +89,69 @@ def test_evaluate_guardrail_returns_no_fixed_response_for_ordinary_message() -> 
     result = evaluate_guardrail("Do you accept walk-ins?")
     assert result.category is GuardrailCategory.NONE
     assert result.fixed_response is None
+
+
+# --- what an emergency is, and what is just a toothache ---------------------
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ong tomondagi jag tishim og'rivotti",
+        "tishim ogrivotti",
+        "тишим оғрияпти",
+        "tishim og'riyapti, nima qilay?",
+        "boshim aylanyapti",
+    ],
+)
+def test_a_toothache_is_not_an_ambulance(message: str) -> None:
+    """From production: "ong tomondagi jag tishim og'rivotti" was answered
+    with "call 103 immediately", in English. "og'rivotti" is the plain verb
+    "it hurts" — the single most common thing anybody writes to a dental
+    clinic, and the reason they are writing at all.
+    """
+    assert evaluate_guardrail(message).category is not GuardrailCategory.EMERGENCY
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "qon to'xtamayapti",
+        "nafas ololmayapman",
+        "hushidan ketdi",
+        "кровь не останавливается",
+        "can't stop bleeding",
+    ],
+)
+def test_a_real_emergency_still_is_one(message: str) -> None:
+    """Narrowing the list must not have emptied it: bleeding that will not
+    stop, losing consciousness and trouble breathing are not things a
+    dentist handles in a chat.
+    """
+    assert evaluate_guardrail(message).category is GuardrailCategory.EMERGENCY
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("qon to'xtamayapti", "uz-latn"),
+        ("қон тўхтамаяпти", "uz-cyrl"),
+        ("кровь не останавливается", "ru"),
+        ("can't stop bleeding", "uz-latn"),
+    ],
+)
+def test_the_emergency_line_is_written_where_the_patient_can_read_it(
+    message: str, expected: str
+) -> None:
+    """A real patient in Tashkent was told, in English, to call 103. In an
+    emergency a message somebody cannot read is the same as no message.
+
+    Anything unrecognised falls back to Uzbek Latin — the clinic's own
+    language, and a safer default than English.
+    """
+    assert evaluate_guardrail(message).fixed_response == EMERGENCY_RESPONSES[expected]
+
+
+def test_every_emergency_translation_names_the_ambulance_number() -> None:
+    for text in EMERGENCY_RESPONSES.values():
+        assert "103" in text

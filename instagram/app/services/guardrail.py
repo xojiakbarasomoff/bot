@@ -101,11 +101,19 @@ DEFAULT_EMERGENCY_KEYWORDS: Sequence[str] = (
     "ne mogu dyshat",
     "trudno dyshat",
     "bol v grudi",
-    # --- Uzbek (Latin) — PENDING NATIVE-SPEAKER REVIEW ---
+    # --- Uzbek (Latin) ---
+    #
+    # "og'rivotti" was here and had to come out. It is the plain verb "it
+    # hurts", which is the single most common thing anybody writes to a
+    # dental clinic -- "ong tomondagi jag tishim og'rivotti" was answered
+    # with "call 103 immediately", in English, to a real patient. A toothache
+    # is why these people write; it is not an ambulance.
+    #
+    # What is left describes things a dentist cannot handle in a chat:
+    # bleeding that will not stop, losing consciousness, trouble breathing.
     "kuchli og'riq",
     "chidab bo'lmas og'riq",
     "chidab bo'lmaydigan og'riq",
-    "og'rivotti",
     "qon to'xtamayapti",
     "qon ketishi to'xtamayapti",
     "qattiq qon ketyapti",
@@ -114,8 +122,6 @@ DEFAULT_EMERGENCY_KEYWORDS: Sequence[str] = (
     "hushidan ketdi",
     "hushini yo'qotdi",
     "behush bo'lib qoldi",
-    "behol",
-    "boshim aylanyapti",
     "nafas ololmayapman",
     "nafas olib bo'lmayapti",
     "nafas qisilmoqda",
@@ -128,8 +134,6 @@ DEFAULT_EMERGENCY_KEYWORDS: Sequence[str] = (
     "ҳушидан кетди",
     "ҳушини йўқотди",
     "беҳуш бўлиб қолди",
-    "беҳол",
-    "бошим айланяпти",
     "нафас ололмаяпман",
     "кўкрак оғриғи",
 )
@@ -201,11 +205,52 @@ DEFAULT_MEDICAL_ADVICE_KEYWORDS: Sequence[str] = (
 # TODO(IGB-?): exact wording AND the emergency phone number (103) must be
 # confirmed per clinic/tenant — the TZ lists this as an open question — and
 # translated per language rather than always replying in English.
-EMERGENCY_RESPONSE = (
-    "This sounds like it could be a medical emergency. Please call 103 right away, "
-    "or come to the clinic immediately — please don't wait for a reply here. "
-    "If someone can come with you, that's even better."
-)
+# The one reply the model never writes, so it cannot mirror the patient's
+# language the way every other answer does. It has to be chosen here.
+#
+# It used to be a single English sentence, and a real patient in Tashkent
+# was told in English to call 103. In an emergency a message the person
+# cannot read is the same as no message, so the language is now picked from
+# what they wrote -- three fixed translations, no model call, because this
+# path must work when the model is rate-limited, slow, or down.
+EMERGENCY_RESPONSES = {
+    "uz-latn": (
+        "Bu shoshilinch tibbiy holatga o'xshaydi. Iltimos, darhol 103 ga qo'ng'iroq "
+        "qiling yoki tezda klinikaga keling — bu yerda javob kutib turmang. "
+        "Yoningizda kimdir bo'lsa, birga keling."
+    ),
+    "uz-cyrl": (
+        "Бу шошилинч тиббий ҳолатга ўхшайди. Илтимос, дарҳол 103 га қўнғироқ "
+        "қилинг ёки тезда клиникага келинг — бу ерда жавоб кутиб турманг. "
+        "Ёнингизда кимдир бўлса, бирга келинг."
+    ),
+    "ru": (
+        "Это похоже на неотложное состояние. Пожалуйста, срочно позвоните 103 "
+        "или приезжайте в клинику — не ждите ответа здесь. "
+        "Если рядом кто-то есть, приезжайте вместе."
+    ),
+}
+
+# Letters Uzbek Cyrillic has and Russian does not. Their presence is what
+# separates the two Cyrillic cases; with none of them, Cyrillic is Russian.
+_UZBEK_CYRILLIC = frozenset("ўқғҳ")
+
+
+def emergency_response(user_message: str) -> str:
+    """The emergency line, in the alphabet the patient just used.
+
+    A deliberately small rule rather than a language detector: this runs on
+    the path where somebody may be bleeding, and it has to be right and
+    instant, not clever. Anything not Cyrillic is answered in Uzbek Latin --
+    the clinic's own language, and the safer default than English for a
+    patient who wrote in something unrecognised.
+    """
+    lowered = user_message.lower()
+    if any(letter in lowered for letter in _UZBEK_CYRILLIC):
+        return EMERGENCY_RESPONSES["uz-cyrl"]
+    if any("Ѐ" <= character <= "ӿ" for character in lowered):
+        return EMERGENCY_RESPONSES["ru"]
+    return EMERGENCY_RESPONSES["uz-latn"]
 
 
 class GuardrailClassifier(ABC):
@@ -256,7 +301,7 @@ def evaluate_guardrail(
     category = (classifier or _DEFAULT_CLASSIFIER).classify(user_message)
     if category is GuardrailCategory.EMERGENCY:
         logger.warning("guardrail_emergency_triggered")
-        return GuardrailResult(category=category, fixed_response=EMERGENCY_RESPONSE)
+        return GuardrailResult(category=category, fixed_response=emergency_response(user_message))
     if category is GuardrailCategory.MEDICAL_ADVICE:
         logger.info("guardrail_medical_advice_flagged")
     return GuardrailResult(category=category, fixed_response=None)

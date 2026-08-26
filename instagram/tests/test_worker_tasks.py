@@ -20,7 +20,7 @@ from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.repositories.message import MessageRepository
 from app.repositories.tenant import TenantRepository
 from app.repositories.user import UserRepository
-from app.services.guardrail import EMERGENCY_RESPONSE
+from app.services.guardrail import EMERGENCY_RESPONSES
 from app.workers.tasks import fire_debounce_window, process_inbound_message
 from tests.conftest import Seed
 
@@ -163,7 +163,7 @@ async def test_process_inbound_message_records_the_reply_in_the_transcript(
         messages = await MessageRepository(db_session).list_recent(seed.a.conversation.id, 10)
 
     bot_messages = [m for m in messages if m.sender == MessageSender.BOT]
-    assert [m.content for m in bot_messages] == [EMERGENCY_RESPONSE]
+    assert [m.content for m in bot_messages] == [EMERGENCY_RESPONSES["uz-latn"]]
     assert bot_messages[0].channel == "instagram"
 
 
@@ -301,7 +301,7 @@ async def test_reply_uses_the_named_channels_token_not_whichever_comes_first(
         adapter=adapter,
     )
 
-    assert client.calls == [("second-account-token", SENDER, EMERGENCY_RESPONSE)]
+    assert client.calls == [("second-account-token", SENDER, EMERGENCY_RESPONSES["uz-latn"])]
 
 
 # --- fire_debounce_window: window fires once after quiet period ---
@@ -620,6 +620,6 @@ async def test_process_inbound_message_emergency_reply_is_sent_via_client(
 
     # generate_answer short-circuits emergencies before touching
     # embedding/LLM providers (see app.services.answer.generate_answer), so
-    # none were injected above — the fixed EMERGENCY_RESPONSE is what must
+    # none were injected above — the fixed emergency line is what must
     # have been sent.
-    assert client.calls == [("token", SENDER, EMERGENCY_RESPONSE)]
+    assert client.calls == [("token", SENDER, EMERGENCY_RESPONSES["uz-latn"])]

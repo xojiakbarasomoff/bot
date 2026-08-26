@@ -10,7 +10,7 @@ from app.rag.embeddings import EMBEDDING_DIMENSIONS, EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider
 from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.services.answer import NO_MATCH_RESPONSE, generate_answer
-from app.services.guardrail import EMERGENCY_RESPONSE
+from app.services.guardrail import EMERGENCY_RESPONSES
 from tests.conftest import Seed, isolated_settings
 
 # A fixed, non-zero direction. Distance to itself is 0.0, well inside the
@@ -604,7 +604,7 @@ async def test_generate_answer_emergency_message_returns_fixed_response(
             llm_provider=llm_provider,
         )
 
-    assert result == EMERGENCY_RESPONSE
+    assert result == EMERGENCY_RESPONSES["uz-latn"]
     assert llm_provider.calls == []
     assert embedding_provider.calls == []
 
@@ -625,7 +625,9 @@ async def test_generate_answer_emergency_message_in_russian(
             llm_provider=llm_provider,
         )
 
-    assert result == EMERGENCY_RESPONSE
+    # Russian in, Russian out. This used to be one English sentence for
+    # everybody, and a patient in Tashkent was told in English to call 103.
+    assert result == EMERGENCY_RESPONSES["ru"]
     assert llm_provider.calls == []
     assert embedding_provider.calls == []
 
@@ -646,6 +648,6 @@ async def test_generate_answer_emergency_message_in_uzbek(
             llm_provider=llm_provider,
         )
 
-    assert result == EMERGENCY_RESPONSE
+    assert result == EMERGENCY_RESPONSES["uz-latn"]
     assert llm_provider.calls == []
     assert embedding_provider.calls == []
