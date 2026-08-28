@@ -29,6 +29,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any, cast
 
@@ -37,6 +38,7 @@ import httpx
 from google.oauth2 import service_account
 
 from app.core.config import Settings, get_settings
+from app.services.appointment import CLINIC_TIMEZONE
 from app.services.conversation_signals import looks_like_a_phone_number
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,18 @@ SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
 # The header the clinic reads. Written once, when the tab is empty, and
 # never rewritten: an owner who renames a column has renamed it on purpose.
-HEADER = ("Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+# Date first, because it is what the owner scans for: without it every lead
+# since the clinic opened sits in one undated pile, and "who wrote in today"
+# cannot be answered by looking. Written as YYYY-MM-DD HH:MM so that sorting
+# the column as text -- which is what a filter does -- is also true
+# chronological order.
+HEADER = ("Sana", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+
+# The A1 column letters for the shape above, stated once so no range in
+# this module can drift from the header.
+_LAST_COLUMN = "E"
+# Where the phone lives, which is how a returning patient finds their row.
+_PHONE_COLUMN = "C"
 
 # Enough for a sentence about a toothache, short enough that the column
 # stays readable in a spreadsheet without anyone widening it.
@@ -63,7 +76,7 @@ TIMEOUT_SECONDS = 20.0
 # story column wide enough to hold a sentence.
 _HEADER_COLOUR = "#0F766E"
 _BAND_COLOUR = "#F1F5F9"
-_COLUMN_WIDTHS = (220, 170, 130, 560)
+_COLUMN_WIDTHS = (140, 200, 150, 120, 520)
 
 
 def _rgb(value: str) -> dict[str, float]:
@@ -135,8 +148,8 @@ def _style_requests(sheet_id: int) -> list[dict[str, Any]]:
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 1,
-                    "endColumnIndex": 2,
+                    "startColumnIndex": 2,
+                    "endColumnIndex": 3,
                 },
                 "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
                 "fields": "userEnteredFormat.numberFormat",
@@ -156,6 +169,20 @@ def _style_requests(sheet_id: int) -> list[dict[str, Any]]:
         # So the owner can keep only this week's Telegram leads without
         # asking anyone how.
         {"setBasicFilter": {"filter": {"range": {**full, "startRowIndex": 0}}}},
+        # A new tab is 26 columns wide, so the five that carry anything sit
+        # against a grey field three times their width. Deleting the rest
+        # makes the sheet look like a document rather than a spreadsheet
+        # somebody abandoned, and stops a stray value from being typed into
+        # a column nothing reads.
+        {
+            "deleteDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": len(HEADER),
+                }
+            }
+        },
     ]
     requests.extend(
         {
@@ -188,11 +215,23 @@ class LeadRow:
     source: str
     comment: str | None
 
-    def as_cells(self) -> list[str]:
-        comment = (self.comment or "").strip().replace("\n", " ")
+    def as_cells(self, recorded_at: datetime) -> list[str]:
+        """The row as the clinic reads it, dated in the clinic's own time.
+
+        The timestamp is an argument rather than read here, so this stays
+        a function of its inputs and a test can decide what day it is.
+        """
+        comment = (self.comment or "").strip().replace(chr(10), " ")
         if len(comment) > MAX_COMMENT:
             comment = comment[: MAX_COMMENT - 1].rstrip() + "…"
-        return [self.name or "", self.phone or "", self.source, comment]
+        local = recorded_at.astimezone(CLINIC_TIMEZONE)
+        return [
+            f"{local:%Y-%m-%d %H:%M}",
+            self.name or "",
+            self.phone or "",
+            self.source,
+            comment,
+        ]
 
 
 def _load_credentials(raw: str) -> service_account.Credentials:
@@ -274,14 +313,17 @@ class SheetsMirror:
         sheet is theirs.
         """
         existing = await self._call(
-            client, "GET", f"/values/{self._worksheet}!A1:D1", params={"majorDimension": "ROWS"}
+            client,
+            "GET",
+            f"/values/{self._worksheet}!A1:{_LAST_COLUMN}1",
+            params={"majorDimension": "ROWS"},
         )
         if existing.get("values"):
             return
         await self._call(
             client,
             "PUT",
-            f"/values/{self._worksheet}!A1:D1",
+            f"/values/{self._worksheet}!A1:{_LAST_COLUMN}1",
             params={"valueInputOption": "RAW"},
             json={"values": [list(HEADER)]},
         )
@@ -326,28 +368,37 @@ class SheetsMirror:
                 return sheet_id
         return None
 
-    async def append(self, client: httpx.AsyncClient, row: LeadRow) -> None:
+    async def append(self, client: httpx.AsyncClient, row: LeadRow, recorded_at: datetime) -> None:
         await self._call(
             client,
             "POST",
-            f"/values/{self._worksheet}!A:D:append",
+            f"/values/{self._worksheet}!A:{_LAST_COLUMN}:append",
             params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
-            json={"values": [row.as_cells()]},
+            json={"values": [row.as_cells(recorded_at)]},
         )
 
-    async def update_row(self, client: httpx.AsyncClient, row_number: int, row: LeadRow) -> None:
+    async def update_row(
+        self, client: httpx.AsyncClient, row_number: int, row: LeadRow, recorded_at: datetime
+    ) -> None:
         """Rewrite one row in place, for a patient the clinic already has.
 
         A name or a phone usually arrives a few turns after the first
         message. Appending again would give the owner the same person twice,
         once without their number.
+
+        The write starts at column B, so the date stays as it was: it says
+        when this patient first wrote in, and moving it every time they send
+        another message would turn the column into "last seen" — which is
+        not the question the owner is scanning it for.
         """
         await self._call(
             client,
             "PUT",
-            f"/values/{self._worksheet}!A{row_number}:D{row_number}",
+            f"/values/{self._worksheet}!B{row_number}:{_LAST_COLUMN}{row_number}",
             params={"valueInputOption": "RAW"},
-            json={"values": [row.as_cells()]},
+            # Column A is excluded from the range above, so the leading date
+            # cell here is dropped rather than written.
+            json={"values": [row.as_cells(recorded_at)[1:]]},
         )
 
     async def find_row(self, client: httpx.AsyncClient, key: str) -> int | None:
@@ -361,7 +412,10 @@ class SheetsMirror:
         if not key:
             return None
         body = await self._call(
-            client, "GET", f"/values/{self._worksheet}!B:B", params={"majorDimension": "COLUMNS"}
+            client,
+            "GET",
+            f"/values/{self._worksheet}!{_PHONE_COLUMN}:{_PHONE_COLUMN}",
+            params={"majorDimension": "COLUMNS"},
         )
         columns = body.get("values") or [[]]
         for index, value in enumerate(columns[0], start=1):
@@ -371,13 +425,14 @@ class SheetsMirror:
 
     async def upsert(self, row: LeadRow) -> None:
         """Put this lead in the sheet, once."""
+        recorded_at = datetime.now(UTC)
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             await self.ensure_header(client)
             existing = await self.find_row(client, row.phone or "")
             if existing is not None:
-                await self.update_row(client, existing, row)
+                await self.update_row(client, existing, row, recorded_at)
                 return
-            await self.append(client, row)
+            await self.append(client, row, recorded_at)
 
 
 @lru_cache

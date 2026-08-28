@@ -6,13 +6,16 @@ no -- which is the part that decides whether a patient's reply survives a
 broken sheet.
 """
 
+import asyncio
 import base64
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 
+from app.services.appointment import CLINIC_TIMEZONE
 from app.services.sheets import (
     HEADER,
     MAX_COMMENT,
@@ -58,18 +61,50 @@ def _mirror(handler: Any) -> tuple[SheetsMirror, list[httpx.Request]]:
 # --- the row the clinic reads ----------------------------------------------
 
 
+NOON = datetime(2026, 8, 28, 12, 30, tzinfo=CLINIC_TIMEZONE)
+
+
 def test_the_columns_are_the_ones_the_clinic_asked_for() -> None:
     row = LeadRow(name="Nodira Karimova", phone="998901234567", source="telegram", comment="tish")
 
-    assert row.as_cells() == ["Nodira Karimova", "998901234567", "telegram", "tish"]
-    assert HEADER == ("Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+    assert row.as_cells(NOON) == [
+        "2026-08-28 12:30",
+        "Nodira Karimova",
+        "998901234567",
+        "telegram",
+        "tish",
+    ]
+    assert HEADER == ("Sana", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+
+
+def test_the_date_is_written_in_the_clinics_own_time_not_utc() -> None:
+    """The owner reads this at the front desk, so 12:30 has to mean 12:30
+    there — a UTC timestamp would put every morning lead on the previous day
+    five hours earlier.
+    """
+    row = LeadRow(name=None, phone="1", source="telegram", comment=None)
+
+    assert row.as_cells(datetime(2026, 8, 28, 7, 30, tzinfo=UTC))[0] == "2026-08-28 12:30"
+
+
+def test_the_date_sorts_chronologically_as_text() -> None:
+    """A filter sorts a text column alphabetically. YYYY-MM-DD is the format
+    where that is also the right order.
+    """
+    earlier = LeadRow(None, "1", "telegram", None).as_cells(
+        datetime(2026, 8, 9, 9, 0, tzinfo=CLINIC_TIMEZONE)
+    )[0]
+    later = LeadRow(None, "2", "telegram", None).as_cells(NOON)[0]
+
+    assert earlier < later
 
 
 def test_a_missing_name_or_number_is_an_empty_cell_not_the_word_none() -> None:
     """A lead usually arrives before the name does. "None" in a spreadsheet
     column reads as a person called None.
     """
-    assert LeadRow(name=None, phone=None, source="instagram", comment=None).as_cells() == [
+    assert LeadRow(name=None, phone=None, source="instagram", comment=None).as_cells(NOON) == [
+        "2026-08-28 12:30",
         "",
         "",
         "instagram",
@@ -80,7 +115,7 @@ def test_a_missing_name_or_number_is_an_empty_cell_not_the_word_none() -> None:
 def test_a_long_story_is_trimmed_so_the_column_stays_readable() -> None:
     row = LeadRow(name=None, phone="1", source="telegram", comment="a" * 500)
 
-    cell = row.as_cells()[3]
+    cell = row.as_cells(NOON)[4]
 
     assert len(cell) == MAX_COMMENT
     assert cell.endswith("…")
@@ -89,7 +124,7 @@ def test_a_long_story_is_trimmed_so_the_column_stays_readable() -> None:
 def test_newlines_are_flattened_so_one_lead_stays_one_row() -> None:
     row = LeadRow(name=None, phone="1", source="telegram", comment="tishim\nog'riyapti")
 
-    assert row.as_cells()[3] == "tishim og'riyapti"
+    assert row.as_cells(NOON)[4] == "tishim og'riyapti"
 
 
 # --- what the comment says --------------------------------------------------
@@ -148,7 +183,7 @@ async def test_a_new_lead_is_appended_under_a_header_written_once() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append((request.method, request.url.path))
-        if request.method == "GET" and "!A1:D1" in str(request.url):
+        if request.method == "GET" and "!A1:E1" in str(request.url):
             return httpx.Response(200, json={})  # empty tab
         if request.method == "GET":
             return httpx.Response(200, json={"values": [[]]})
@@ -157,7 +192,7 @@ async def test_a_new_lead_is_appended_under_a_header_written_once() -> None:
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         await mirror.ensure_header(client)
-        await mirror.append(client, LeadRow("N", "998901234567", "telegram", "tish"))
+        await mirror.append(client, LeadRow("N", "998901234567", "telegram", "tish"), NOON)
 
     methods = [method for method, _ in seen]
     # GET the header row, PUT it, GET the sheet ids, POST the styling,
@@ -189,9 +224,9 @@ async def test_a_number_already_in_the_sheet_updates_that_row(monkeypatch: Any) 
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        if request.method == "GET" and "!A1:D1" in url:
+        if request.method == "GET" and "!A1:E1" in url:
             return httpx.Response(200, json={"values": [list(HEADER)]})
-        if request.method == "GET" and "!B:B" in url:
+        if request.method == "GET" and "!C:C" in url:
             return httpx.Response(200, json={"values": [["Telefon", "998901234567"]]})
         written.append(f"{request.method} {request.url.path}")
         return httpx.Response(200, json={})
@@ -200,7 +235,9 @@ async def test_a_number_already_in_the_sheet_updates_that_row(monkeypatch: Any) 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         found = await mirror.find_row(client, "998901234567")
         assert found == 2
-        await mirror.update_row(client, found, LeadRow("Nodira", "998901234567", "telegram", "x"))
+        await mirror.update_row(
+            client, found, LeadRow("Nodira", "998901234567", "telegram", "x"), NOON
+        )
 
     assert written and written[0].startswith("PUT")
 
@@ -302,7 +339,8 @@ def test_the_phone_column_is_text_so_it_is_not_shown_as_9_989e_11() -> None:
     ]
 
     assert len(formats) == 1
-    assert formats[0]["range"]["startColumnIndex"] == 1
+    # Column C — the date pushed it one to the right.
+    assert formats[0]["range"]["startColumnIndex"] == HEADER.index("Telefon")
     assert formats[0]["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "TEXT"
 
 
@@ -327,7 +365,7 @@ async def test_styling_a_tab_never_costs_the_clinic_a_lead(
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request.method)
-        if request.method == "GET" and "!A1:D1" in str(request.url):
+        if request.method == "GET" and "!A1:E1" in str(request.url):
             return httpx.Response(200, json={})
         if request.method == "GET":
             return httpx.Response(
@@ -341,7 +379,47 @@ async def test_styling_a_tab_never_costs_the_clinic_a_lead(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with caplog.at_level("WARNING", logger="app"):
             await mirror.ensure_header(client)
-        await mirror.append(client, LeadRow("N", "1", "telegram", "x"))
+        await mirror.append(client, LeadRow("N", "1", "telegram", "x"), NOON)
 
     assert "sheets_styling_skipped" in caplog.text
     assert calls[-1] == "POST"  # the row still went in
+
+
+def test_the_empty_columns_to_the_right_are_removed() -> None:
+    """A new tab is 26 columns wide. The five that carry anything then sit
+    against a grey field three times their width, which is what the sheet
+    looked like when the clinic first opened it.
+    """
+    deletes = [r["deleteDimension"] for r in _style_requests(0) if "deleteDimension" in r]
+
+    assert len(deletes) == 1
+    assert deletes[0]["range"]["dimension"] == "COLUMNS"
+    # Everything from the first unused column onward, with no end index.
+    assert deletes[0]["range"]["startIndex"] == len(HEADER)
+    assert "endIndex" not in deletes[0]["range"]
+
+
+def test_a_rewrite_leaves_the_date_the_lead_first_arrived_alone() -> None:
+    """The date says when this patient wrote in. Moving it every time they
+    send another message turns the column into "last seen", which is not the
+    question the owner scans it for.
+    """
+    written: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            written.append((str(request.url), request.content.decode()))
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+
+    async def _run() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await mirror.update_row(client, 4, LeadRow("N", "1", "telegram", "x"), NOON)
+
+    asyncio.run(_run())
+
+    url, body = written[0]
+    # The range starts at B, and the payload carries four cells, not five.
+    assert "!B4:E4" in url
+    assert "2026-08-28" not in body
