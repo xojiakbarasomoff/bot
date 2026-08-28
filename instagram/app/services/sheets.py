@@ -29,7 +29,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from typing import Any, cast
 
@@ -46,16 +46,16 @@ logger = logging.getLogger(__name__)
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
-# Time, not date: the date is the tab's own name, so repeating it on every
-# row would be a column that says the same thing a thousand times. What is
-# worth knowing inside a day is the order people arrived in.
-HEADER = ("Vaqt", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+# No date and no time: the date is the tab's own name, and a clock column
+# was answering a question nobody asked of a day's list. The name is what
+# the owner is looking for when they open it.
+HEADER = ("Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
 
 # The A1 column letters for the shape above, stated once so no range in
 # this module can drift from the header.
-_LAST_COLUMN = "E"
+_LAST_COLUMN = "D"
 # Where the phone lives, which is how a returning patient finds their row.
-_PHONE_COLUMN = "C"
+_PHONE_COLUMN = "B"
 
 # Enough for a sentence about a toothache, short enough that the column
 # stays readable in a spreadsheet without anyone widening it.
@@ -72,7 +72,10 @@ TIMEOUT_SECONDS = 20.0
 # story column wide enough to hold a sentence.
 _HEADER_COLOUR = "#0F766E"
 _BAND_COLOUR = "#F1F5F9"
-_COLUMN_WIDTHS = (80, 210, 160, 120, 540)
+_COLUMN_WIDTHS = (220, 170, 130, 560)
+
+# How many rows a day's tab is created with.
+_ROWS_PER_DAY = 200
 
 
 def _rgb(value: str) -> dict[str, float]:
@@ -144,8 +147,8 @@ def _style_requests(sheet_id: int) -> list[dict[str, Any]]:
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
-                    "startColumnIndex": 2,
-                    "endColumnIndex": 3,
+                    "startColumnIndex": HEADER.index("Telefon"),
+                    "endColumnIndex": HEADER.index("Telefon") + 1,
                 },
                 "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
                 "fields": "userEnteredFormat.numberFormat",
@@ -197,23 +200,12 @@ class LeadRow:
     source: str
     comment: str | None
 
-    def as_cells(self, recorded_at: datetime) -> list[str]:
-        """The row as the clinic reads it, dated in the clinic's own time.
-
-        The timestamp is an argument rather than read here, so this stays
-        a function of its inputs and a test can decide what day it is.
-        """
+    def as_cells(self) -> list[str]:
+        """The row as the clinic reads it."""
         comment = (self.comment or "").strip().replace(chr(10), " ")
         if len(comment) > MAX_COMMENT:
             comment = comment[: MAX_COMMENT - 1].rstrip() + "…"
-        local = recorded_at.astimezone(CLINIC_TIMEZONE)
-        return [
-            f"{local:%H:%M}",
-            self.name or "",
-            self.phone or "",
-            self.source,
-            comment,
-        ]
+        return [self.name or "", self.phone or "", self.source, comment]
 
 
 def _load_credentials(raw: str) -> service_account.Credentials:
@@ -305,14 +297,14 @@ class SheetsMirror:
         title = f"{day:%Y-%m-%d}"
         if title in self._known_worksheets:
             return title
-        sheets = await self._worksheet_ids(client)
+        sheets = await self.worksheet_ids(client)
         if title not in sheets:
             sheets[title] = await self._create_worksheet(client, title)
         await self.ensure_header(client, title, sheets[title])
         self._known_worksheets.add(title)
         return title
 
-    async def _worksheet_ids(self, client: httpx.AsyncClient) -> dict[str, int]:
+    async def worksheet_ids(self, client: httpx.AsyncClient) -> dict[str, int]:
         body = await self._call(
             client, "GET", "", params={"fields": "sheets.properties(sheetId,title)"}
         )
@@ -340,7 +332,15 @@ class SheetsMirror:
                                 # grey field three times their width; created
                                 # at the right size, there is nothing to
                                 # delete afterwards.
-                                "gridProperties": {"columnCount": len(HEADER)},
+                                "gridProperties": {
+                                    "columnCount": len(HEADER),
+                                    # A busy clinic sees tens of people a
+                                    # day, not a thousand. Left at the
+                                    # default a year of tabs would be
+                                    # millions of empty cells against the
+                                    # spreadsheet's own limit.
+                                    "rowCount": _ROWS_PER_DAY,
+                                },
                             }
                         }
                     }
@@ -395,24 +395,17 @@ class SheetsMirror:
         except SheetsError as exc:
             logger.warning("sheets_styling_skipped error=%s", exc)
 
-    async def append(
-        self, client: httpx.AsyncClient, worksheet: str, row: LeadRow, recorded_at: datetime
-    ) -> None:
+    async def append(self, client: httpx.AsyncClient, worksheet: str, row: LeadRow) -> None:
         await self._call(
             client,
             "POST",
             f"/values/{worksheet}!A:{_LAST_COLUMN}:append",
             params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
-            json={"values": [row.as_cells(recorded_at)]},
+            json={"values": [row.as_cells()]},
         )
 
     async def update_row(
-        self,
-        client: httpx.AsyncClient,
-        worksheet: str,
-        row_number: int,
-        row: LeadRow,
-        recorded_at: datetime,
+        self, client: httpx.AsyncClient, worksheet: str, row_number: int, row: LeadRow
     ) -> None:
         """Rewrite one row in place, for a patient already on this day's tab.
 
@@ -420,18 +413,13 @@ class SheetsMirror:
         message. Appending again would give the owner the same person twice,
         once without their number.
 
-        The write starts at column B, so the time stays as it was: it says
-        when they first wrote in today, and moving it on every message would
-        turn it into "last seen" -- not the question being asked of it.
         """
         await self._call(
             client,
             "PUT",
-            f"/values/{worksheet}!B{row_number}:{_LAST_COLUMN}{row_number}",
+            f"/values/{worksheet}!A{row_number}:{_LAST_COLUMN}{row_number}",
             params={"valueInputOption": "RAW"},
-            # Column A is excluded from the range above, so the leading time
-            # cell here is dropped rather than written.
-            json={"values": [row.as_cells(recorded_at)[1:]]},
+            json={"values": [row.as_cells()]},
         )
 
     async def find_row(self, client: httpx.AsyncClient, worksheet: str, key: str) -> int | None:
@@ -463,15 +451,56 @@ class SheetsMirror:
 
     async def upsert(self, row: LeadRow) -> None:
         """Put this lead on today's tab, once."""
-        recorded_at = datetime.now(UTC)
-        day = recorded_at.astimezone(CLINIC_TIMEZONE).date()
+        day = datetime.now(UTC).astimezone(CLINIC_TIMEZONE).date()
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             worksheet = await self.worksheet_for(client, day)
             existing = await self.find_row(client, worksheet, row.phone or "")
             if existing is not None:
-                await self.update_row(client, worksheet, existing, row, recorded_at)
+                await self.update_row(client, worksheet, existing, row)
                 return
-            await self.append(client, worksheet, row, recorded_at)
+            await self.append(client, worksheet, row)
+
+
+# How far either side of today the tab strip is kept populated. A week back
+# covers "what came in last Tuesday" without scrolling into last month, and a
+# week forward means the owner can open a day before anybody has written on
+# it -- which is the point of having the dates there to click at all.
+DAYS_BACK = 7
+DAYS_AHEAD = 7
+
+
+async def ensure_day_tabs(*, today: date | None = None) -> int:
+    """Make sure the tab strip has the days around today on it.
+
+    Without this a day only exists once somebody has written in on it, so
+    the strip is full of holes and tomorrow is never there. Called from a
+    daily cron; safe to call as often as you like, since worksheet_for only
+    creates what is missing.
+
+    Returns how many tabs it had to create, for the log line. Never raises:
+    this is housekeeping on a spreadsheet, and it must not be able to take
+    a worker down.
+    """
+    mirror = get_mirror()
+    if mirror is None:
+        return 0
+
+    day = today or datetime.now(UTC).astimezone(CLINIC_TIMEZONE).date()
+    created = 0
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            known = set(await mirror.worksheet_ids(client))
+            for offset in range(-DAYS_BACK, DAYS_AHEAD + 1):
+                title = f"{day + timedelta(days=offset):%Y-%m-%d}"
+                if title in known:
+                    continue
+                await mirror.worksheet_for(client, day + timedelta(days=offset))
+                created += 1
+    except SheetsError as exc:
+        logger.error("sheets_day_tabs_failed error=%s", exc)
+    except Exception:
+        logger.exception("sheets_day_tabs_failed")
+    return created
 
 
 @lru_cache

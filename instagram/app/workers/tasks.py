@@ -11,7 +11,7 @@ import logging
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from arq import cron
@@ -45,7 +45,7 @@ from app.services.conversation_signals import find_phone_number
 from app.services.debounce import join_messages, pop_batch_if_current_generation
 from app.services.delivery import send_reply
 from app.services.reminders import send_due_reminders
-from app.services.sheets import LeadRow, mirror_lead, summarise_problem
+from app.services.sheets import LeadRow, ensure_day_tabs, mirror_lead, summarise_problem
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +292,18 @@ async def send_appointment_reminders(
         )
 
 
+async def refresh_lead_sheet_days(ctx: dict[str, Any], *, today: date | None = None) -> None:
+    """Cron job: keep the clinic's spreadsheet showing the days around today.
+
+    A day's tab is otherwise created only when somebody writes in on it, so
+    the strip at the bottom has holes where quiet days were and never has
+    tomorrow on it at all. This keeps a week either side there to click.
+    """
+    created = await ensure_day_tabs(today=today)
+    if created:
+        logger.info("lead_sheet_days_created", extra={"created": created})
+
+
 # The worker is a separate process from the web app, so it needs its own
 # handler installed -- app.main's call never runs here.
 configure_logging()
@@ -302,5 +314,11 @@ class WorkerSettings:
     # Every five minutes. The reminder windows are hours wide and the job
     # catches up on anything it missed, so this is about how promptly a
     # reminder lands inside its window rather than about not losing one.
-    cron_jobs = [cron(send_appointment_reminders, minute=set(range(0, 60, 5)))]
+    cron_jobs = [
+        cron(send_appointment_reminders, minute=set(range(0, 60, 5))),
+        # Just after midnight in the clinic's own timezone, so the tab for
+        # the new day is there before the first patient of it writes in.
+        # Late enough that a worker restarting over midnight still catches it.
+        cron(refresh_lead_sheet_days, hour={0}, minute={5}),
+    ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
