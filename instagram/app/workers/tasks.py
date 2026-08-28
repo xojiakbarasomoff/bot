@@ -35,6 +35,7 @@ from app.rag.embeddings import EmbeddingProvider
 from app.rag.llm import LLMProvider
 from app.repositories.appointment import AppointmentRepository
 from app.services.answer import generate_answer
+from app.services.appointment import CLINIC_TIMEZONE
 from app.services.booking import settle as settle_booking
 from app.services.conversation import (
     context_for_reply,
@@ -171,6 +172,16 @@ async def process_inbound_message(
                     phone=phone,
                     source=str(channel.type) if channel is not None else "bot",
                     comment=summarise_problem(patient_said),
+                    # The day of the visit, not the day they wrote. Somebody
+                    # who messages on the 28th to be seen on the 31st belongs
+                    # in the 31st's list, because that is the list the front
+                    # desk works from that morning. With nothing booked yet,
+                    # today is the only day they belong to.
+                    day=(
+                        appointment.scheduled_at.astimezone(CLINIC_TIMEZONE).date()
+                        if appointment is not None
+                        else datetime.now(UTC).astimezone(CLINIC_TIMEZONE).date()
+                    ),
                 )
                 if phone or appointment is not None
                 else None

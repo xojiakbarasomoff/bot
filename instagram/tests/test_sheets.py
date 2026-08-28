@@ -8,7 +8,6 @@ broken sheet.
 
 import base64
 import json
-import re
 from datetime import date
 from typing import Any
 
@@ -16,16 +15,15 @@ import httpx
 import pytest
 
 from app.services.sheets import (
-    DATA_HEADER,
-    DATA_SHEET,
     HEADER,
     MAX_COMMENT,
     LeadRow,
     SheetsError,
     SheetsMirror,
+    _decoration_requests,
+    _layout_requests,
     _load_credentials,
-    _style_requests,
-    _view_requests,
+    _sheets_serial,
     mirror_lead,
     summarise_problem,
 )
@@ -81,17 +79,24 @@ TODAY = date(2026, 8, 28)
 
 
 def test_the_columns_are_the_ones_the_clinic_asked_for() -> None:
-    row = LeadRow(name="Nodira Karimova", phone="998901234567", source="telegram", comment="tish")
+    row = LeadRow("Nodira Karimova", "998901234567", "telegram", "tish", TODAY)
 
-    assert row.as_cells() == ["Nodira Karimova", "998901234567", "telegram", "tish"]
-    assert HEADER == ("Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+    assert row.as_cells() == [
+        "2026-08-28",
+        "Nodira Karimova",
+        "998901234567",
+        "telegram",
+        "tish",
+    ]
+    assert HEADER == ("Sana", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
 
 
 def test_a_missing_name_or_number_is_an_empty_cell_not_the_word_none() -> None:
     """A lead usually arrives before the name does. "None" in a spreadsheet
     column reads as a person called None.
     """
-    assert LeadRow(name=None, phone=None, source="instagram", comment=None).as_cells() == [
+    assert LeadRow(None, None, "instagram", None, TODAY).as_cells() == [
+        "2026-08-28",
         "",
         "",
         "instagram",
@@ -100,18 +105,18 @@ def test_a_missing_name_or_number_is_an_empty_cell_not_the_word_none() -> None:
 
 
 def test_a_long_story_is_trimmed_so_the_column_stays_readable() -> None:
-    row = LeadRow(name=None, phone="1", source="telegram", comment="a" * 500)
+    row = LeadRow(None, "1", "telegram", "a" * 500, TODAY)
 
-    cell = row.as_cells()[3]
+    cell = row.as_cells()[4]
 
     assert len(cell) == MAX_COMMENT
     assert cell.endswith("…")
 
 
 def test_newlines_are_flattened_so_one_lead_stays_one_row() -> None:
-    row = LeadRow(name=None, phone="1", source="telegram", comment="tishim\nog'riyapti")
+    row = LeadRow(None, "1", "telegram", "tishim\nog'riyapti", TODAY)
 
-    assert row.as_cells()[3] == "tishim og'riyapti"
+    assert row.as_cells()[4] == "tishim og'riyapti"
 
 
 # --- what the comment says --------------------------------------------------
@@ -178,7 +183,7 @@ async def test_a_lead_is_written_to_the_hidden_sheet_with_its_date() -> None:
 
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await mirror.append(client, LeadRow("N", "998901234567", "telegram", "tish"), TODAY)
+        await mirror.append(client, LeadRow("N", "998901234567", "telegram", "tish", TODAY))
 
     assert written == [["2026-08-28", "N", "998901234567", "telegram", "tish"]]
 
@@ -195,7 +200,7 @@ async def test_the_same_patient_on_the_same_day_is_one_row() -> None:
                 json={
                     "values": [
                         ["Sana", "Ism familiya", "Telefon"],
-                        ["2026-08-28", "", "998901234567"],
+                        [_sheets_serial(TODAY), "", "998901234567"],
                     ]
                 },
             )
@@ -215,7 +220,12 @@ async def test_the_same_patient_on_a_different_day_is_a_new_row() -> None:
         if request.method == "GET" and "!A:C" in str(request.url):
             return httpx.Response(
                 200,
-                json={"values": [["Sana", "Ism", "Telefon"], ["2026-08-20", "", "998901234567"]]},
+                json={
+                    "values": [
+                        ["Sana", "Ism", "Telefon"],
+                        [_sheets_serial(date(2026, 8, 20)), "", "998901234567"],
+                    ]
+                },
             )
         return httpx.Response(200, json={})
 
@@ -242,7 +252,10 @@ async def test_googles_refusal_is_raised_with_enough_to_act_on() -> None:
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(SheetsError, match="403"):
-            await mirror._install_view(client, 0)
+            # A read, not the styling: _style swallows what it is handed, and
+            # what is being checked here is that the error carries the status
+            # and Google's own message.
+            await mirror.find_row(client, "998901234567", TODAY)
 
 
 # --- never at the patient's expense -----------------------------------------
@@ -263,7 +276,7 @@ async def test_a_broken_sheet_never_reaches_the_patient(
     monkeypatch.setattr("app.services.sheets.get_mirror", lambda: _Exploding())
 
     with caplog.at_level("ERROR", logger="app"):
-        await mirror_lead(LeadRow("N", "1", "telegram", "x"))
+        await mirror_lead(LeadRow("N", "1", "telegram", "x", TODAY))
 
     assert "sheets_mirror_failed" in caplog.text
 
@@ -273,7 +286,7 @@ async def test_no_sheet_configured_is_silence_not_an_error(
 ) -> None:
     monkeypatch.setattr("app.services.sheets.get_mirror", lambda: None)
 
-    await mirror_lead(LeadRow("N", "1", "telegram", "x"))
+    await mirror_lead(LeadRow("N", "1", "telegram", "x", TODAY))
 
 
 # --- the key ----------------------------------------------------------------
@@ -303,30 +316,34 @@ def test_a_new_tab_is_made_readable_rather_than_left_as_grey_columns() -> None:
     """This sheet exists because the owner will not open a dashboard, so
     looking like something they will read is not decoration.
     """
-    kinds = [next(iter(request)) for request in _style_requests(0, DATA_HEADER)]
+    kinds = [next(iter(request)) for request in _layout_requests(0)]
 
     assert "updateSheetProperties" in kinds  # frozen header
-    assert "addBanding" in kinds
+    # The filter is the mechanism the whole feature rests on, so it travels
+    # with the layout rather than with the paint.
     assert "setBasicFilter" in kinds
-    assert kinds.count("updateDimensionProperties") == 1 + len(HEADER)  # row + columns
+    assert "addBanding" in [next(iter(r)) for r in _decoration_requests(0)]
 
 
 def test_the_phone_column_is_text_so_it_is_not_shown_as_9_989e_11() -> None:
-    formats = [
-        request["repeatCell"]
-        for request in _style_requests(0, DATA_HEADER)
+    formats = {
+        request["repeatCell"]["range"]["startColumnIndex"]: request["repeatCell"]["cell"][
+            "userEnteredFormat"
+        ]["numberFormat"]
+        for request in _layout_requests(0)
         if "repeatCell" in request and "numberFormat" in request["repeatCell"]["fields"]
-    ]
+    }
 
-    assert len(formats) == 1
-    assert formats[0]["range"]["startColumnIndex"] == DATA_HEADER.index("Telefon")
-    assert formats[0]["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "TEXT"
+    assert formats[HEADER.index("Telefon")]["type"] == "TEXT"
+    # And the date is a real date, which is what puts "Kecha / Bugun / Erta"
+    # in the filter menu.
+    assert formats[HEADER.index("Sana")]["type"] == "DATE"
 
 
 def test_the_story_column_wraps_instead_of_running_under_the_next_one() -> None:
     wrapping = [
         request["repeatCell"]
-        for request in _style_requests(0, DATA_HEADER)
+        for request in _layout_requests(0)
         if "repeatCell" in request
         and request["repeatCell"]["cell"]["userEnteredFormat"].get("wrapStrategy") == "WRAP"
     ]
@@ -344,12 +361,6 @@ async def test_styling_a_tab_never_costs_the_clinic_a_lead(
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request.method)
-        if request.method == "GET" and "!A1:D1" in str(request.url):
-            return httpx.Response(200, json={})
-        if request.method == "GET":
-            return httpx.Response(
-                200, json={"sheets": [{"properties": {"sheetId": 0, "title": "Lidlar"}}]}
-            )
         if str(request.url).endswith(":batchUpdate"):
             return httpx.Response(500, text="styling exploded")
         return httpx.Response(200, json={})
@@ -357,113 +368,36 @@ async def test_styling_a_tab_never_costs_the_clinic_a_lead(
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with caplog.at_level("WARNING", logger="app"):
-            await mirror._install_view(client, 0)
-        await mirror.append(client, LeadRow("N", "1", "telegram", "x"), TODAY)
+            await mirror._style(client, 0)
+        await mirror.append(client, LeadRow("N", "1", "telegram", "x", TODAY))
 
     assert "sheets_styling_skipped" in caplog.text
     assert calls[-1] == "POST"  # the row still went in
 
 
-def test_styling_does_not_try_to_delete_columns_that_were_never_created() -> None:
-    """A tab is created exactly as wide as the header, so there is nothing to
-    delete. Asking anyway fails the whole batch — which is how a day's tab
-    once ended up created but unformatted.
+def test_the_row_carries_the_day_it_belongs_to() -> None:
+    """Not the day the patient wrote. Somebody who messages on the 28th to be
+    seen on the 31st belongs in the 31st's list, because that is the list the
+    front desk works from that morning.
     """
-    assert not [r for r in _style_requests(0, DATA_HEADER) if "deleteDimension" in r]
+    booked = LeadRow("Kelajak", "998901110031", "telegram", "31 avgustga", date(2026, 8, 31))
+
+    assert booked.as_cells()[0] == "2026-08-31"
 
 
-# --- the sheet the clinic actually opens ------------------------------------
-
-
-def test_the_picker_holds_its_date_as_text() -> None:
-    """Left as an ordinary cell, choosing a day turns it into a real date
-    value while the hidden sheet stores text, so the comparison matches
-    nothing and the table just says nobody wrote in. Found live, not in
-    review.
+def test_the_date_goes_in_as_iso_whatever_it_is_shown_as() -> None:
+    """ISO is the shape Sheets parses regardless of the spreadsheet's locale.
+    "31.08.2026" is not, and would land as text on a sheet set to English —
+    which would take the whole date filter with it.
     """
-    formats = [
-        r["repeatCell"]
-        for r in _view_requests(0)
-        if "repeatCell" in r and "numberFormat" in r["repeatCell"]["fields"]
-    ]
+    cells = LeadRow(None, "1", "telegram", None, date(2026, 8, 31)).as_cells()
 
-    assert len(formats) == 1
-    assert formats[0]["range"]["startRowIndex"] == 0
-    assert formats[0]["cell"]["userEnteredFormat"]["numberFormat"]["type"] == "TEXT"
+    assert cells[0] == "2026-08-31"
 
 
-def test_the_dropdown_offers_the_days_on_record() -> None:
-    [validation] = [r["setDataValidation"] for r in _view_requests(0) if "setDataValidation" in r]
-
-    condition = validation["rule"]["condition"]
-    assert condition["type"] == "ONE_OF_RANGE"
-    assert DATA_SHEET in condition["values"][0]["userEnteredValue"]
-    assert validation["rule"]["showCustomUi"] is True
-
-
-def test_the_dropdown_is_not_strict() -> None:
-    """A day nobody wrote in on is a reasonable thing to type, and being
-    refused for it is confusing.
+def test_a_day_becomes_the_serial_sheets_actually_stores() -> None:
+    """find_row reads unformatted values, so it compares against the number
+    Sheets keeps rather than whatever the locale renders it back as.
     """
-    [validation] = [r["setDataValidation"] for r in _view_requests(0) if "setDataValidation" in r]
-
-    assert validation["rule"]["strict"] is False
-
-
-def test_the_picker_and_the_header_stay_in_view() -> None:
-    [frozen] = [
-        r["updateSheetProperties"]
-        for r in _view_requests(0)
-        if "updateSheetProperties" in r and "frozenRowCount" in r["updateSheetProperties"]["fields"]
-    ]
-
-    rows = frozen["properties"]["gridProperties"]["frozenRowCount"]
-    assert rows == 3  # the picker, the blank line, the header
-
-
-async def test_the_view_formulas_are_rewritten_every_start() -> None:
-    """A cleared formula is a sheet that silently shows nothing, with no way
-    for the owner to tell why — so these are not treated like the styling,
-    which is left alone once applied.
-    """
-    written: dict[str, str] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "PUT" and "/values/" in str(request.url):
-            cell = str(request.url).split("/values/")[1].split("?")[0]
-            written[cell] = str(json.loads(request.content)["values"][0][0])
-        return httpx.Response(200, json={})
-
-    mirror, _ = _mirror(handler)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await mirror._install_view(client, 0)
-
-    picker = next(v for k, v in written.items() if k.endswith("A1"))
-    table = next(v for k, v in written.items() if k.endswith("A4"))
-    assert picker == "Sana:"
-    assert table.startswith("=IFERROR(FILTER(")
-    assert DATA_SHEET in table
-
-
-async def test_every_formula_reference_is_absolute() -> None:
-    """Appending a lead inserts a row, and Sheets rewrites relative
-    references pointing past it. Live, a relative A2:A silently became A5:A
-    after three leads and the dropdown emptied.
-    """
-    written: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "PUT" and "/values/" in str(request.url):
-            written.append(str(json.loads(request.content)["values"][0][0]))
-        return httpx.Response(200, json={})
-
-    mirror, _ = _mirror(handler)
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await mirror._install_view(client, 0)
-        await mirror._install_day_list(client)
-
-    formulas = [value for value in written if value.startswith("=")]
-    assert formulas
-    for formula in formulas:
-        # No bare column-and-row reference: every one carries its dollars.
-        assert not re.search(r"(?<![$\w])[A-Z]\d", formula), formula
+    assert _sheets_serial(date(1899, 12, 31)) == 1
+    assert _sheets_serial(date(2026, 8, 31)) == 46265
