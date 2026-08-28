@@ -29,7 +29,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from typing import Any, cast
 
@@ -46,14 +46,10 @@ logger = logging.getLogger(__name__)
 SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
 SCOPES = ("https://www.googleapis.com/auth/spreadsheets",)
 
-# The header the clinic reads. Written once, when the tab is empty, and
-# never rewritten: an owner who renames a column has renamed it on purpose.
-# Date first, because it is what the owner scans for: without it every lead
-# since the clinic opened sits in one undated pile, and "who wrote in today"
-# cannot be answered by looking. Written as YYYY-MM-DD HH:MM so that sorting
-# the column as text -- which is what a filter does -- is also true
-# chronological order.
-HEADER = ("Sana", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+# Time, not date: the date is the tab's own name, so repeating it on every
+# row would be a column that says the same thing a thousand times. What is
+# worth knowing inside a day is the order people arrived in.
+HEADER = ("Vaqt", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
 
 # The A1 column letters for the shape above, stated once so no range in
 # this module can drift from the header.
@@ -76,7 +72,7 @@ TIMEOUT_SECONDS = 20.0
 # story column wide enough to hold a sentence.
 _HEADER_COLOUR = "#0F766E"
 _BAND_COLOUR = "#F1F5F9"
-_COLUMN_WIDTHS = (140, 200, 150, 120, 520)
+_COLUMN_WIDTHS = (80, 210, 160, 120, 540)
 
 
 def _rgb(value: str) -> dict[str, float]:
@@ -169,20 +165,6 @@ def _style_requests(sheet_id: int) -> list[dict[str, Any]]:
         # So the owner can keep only this week's Telegram leads without
         # asking anyone how.
         {"setBasicFilter": {"filter": {"range": {**full, "startRowIndex": 0}}}},
-        # A new tab is 26 columns wide, so the five that carry anything sit
-        # against a grey field three times their width. Deleting the rest
-        # makes the sheet look like a document rather than a spreadsheet
-        # somebody abandoned, and stops a stray value from being typed into
-        # a column nothing reads.
-        {
-            "deleteDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "COLUMNS",
-                    "startIndex": len(HEADER),
-                }
-            }
-        },
     ]
     requests.extend(
         {
@@ -226,7 +208,7 @@ class LeadRow:
             comment = comment[: MAX_COMMENT - 1].rstrip() + "…"
         local = recorded_at.astimezone(CLINIC_TIMEZONE)
         return [
-            f"{local:%Y-%m-%d %H:%M}",
+            f"{local:%H:%M}",
             self.name or "",
             self.phone or "",
             self.source,
@@ -277,7 +259,9 @@ class SheetsMirror:
             )
         self._credentials = _load_credentials(resolved.google_service_account_json)
         self._spreadsheet_id = resolved.google_sheets_spreadsheet_id
-        self._worksheet = resolved.google_sheets_worksheet
+        # Tab titles already created this process, so a busy day does
+        # not re-read the spreadsheet's tab list for every message.
+        self._known_worksheets: set[str] = set()
 
     def _token(self) -> str:
         # google-auth refreshes only when the current token is close to
@@ -305,7 +289,69 @@ class SheetsMirror:
         body: dict[str, Any] = response.json()
         return body
 
-    async def ensure_header(self, client: httpx.AsyncClient) -> None:
+    async def worksheet_for(self, client: httpx.AsyncClient, day: date) -> str:
+        """The tab for one day, created and laid out if it is not there yet.
+
+        A tab per day rather than one long list, because that is the question
+        the owner actually asks: not "every lead we have ever had" but "who
+        wrote in today". With a single sheet they were scrolling past three
+        weeks of other people to find this morning; now the day is a click at
+        the bottom of the window.
+
+        Cached per title, so a worker answering forty messages on a Tuesday
+        reads the tab list once rather than forty times. The cache is keyed
+        by date, so tomorrow simply misses it.
+        """
+        title = f"{day:%Y-%m-%d}"
+        if title in self._known_worksheets:
+            return title
+        sheets = await self._worksheet_ids(client)
+        if title not in sheets:
+            sheets[title] = await self._create_worksheet(client, title)
+        await self.ensure_header(client, title, sheets[title])
+        self._known_worksheets.add(title)
+        return title
+
+    async def _worksheet_ids(self, client: httpx.AsyncClient) -> dict[str, int]:
+        body = await self._call(
+            client, "GET", "", params={"fields": "sheets.properties(sheetId,title)"}
+        )
+        return {
+            sheet["properties"]["title"]: sheet["properties"]["sheetId"]
+            for sheet in body.get("sheets", [])
+            if "properties" in sheet
+        }
+
+    async def _create_worksheet(self, client: httpx.AsyncClient, title: str) -> int:
+        """Add the day's tab at the end, so the tab strip reads in order."""
+        body = await self._call(
+            client,
+            "POST",
+            ":batchUpdate",
+            json={
+                "requests": [
+                    {
+                        "addSheet": {
+                            "properties": {
+                                "title": title,
+                                # Exactly as wide as the columns that carry
+                                # something. A default tab is 26 columns, and
+                                # the five with content then sit against a
+                                # grey field three times their width; created
+                                # at the right size, there is nothing to
+                                # delete afterwards.
+                                "gridProperties": {"columnCount": len(HEADER)},
+                            }
+                        }
+                    }
+                ]
+            },
+        )
+        sheet_id: int = body["replies"][0]["addSheet"]["properties"]["sheetId"]
+        logger.warning("sheets_day_created title=%s", title)
+        return sheet_id
+
+    async def ensure_header(self, client: httpx.AsyncClient, worksheet: str, gid: int) -> None:
         """Write the column names, but only into an empty tab.
 
         Checked rather than assumed: rewriting row 1 on every deploy would
@@ -315,7 +361,7 @@ class SheetsMirror:
         existing = await self._call(
             client,
             "GET",
-            f"/values/{self._worksheet}!A1:{_LAST_COLUMN}1",
+            f"/values/{worksheet}!A1:{_LAST_COLUMN}1",
             params={"majorDimension": "ROWS"},
         )
         if existing.get("values"):
@@ -323,33 +369,25 @@ class SheetsMirror:
         await self._call(
             client,
             "PUT",
-            f"/values/{self._worksheet}!A1:{_LAST_COLUMN}1",
+            f"/values/{worksheet}!A1:{_LAST_COLUMN}1",
             params={"valueInputOption": "RAW"},
             json={"values": [list(HEADER)]},
         )
-        await self._style_new_sheet(client)
+        await self._style_new_sheet(client, gid)
 
-    async def _style_new_sheet(self, client: httpx.AsyncClient) -> None:
+    async def _style_new_sheet(self, client: httpx.AsyncClient, gid: int) -> None:
         """Make the tab readable, once, at the moment it is created.
 
-        A default Sheets tab is four unlabelled columns of grey — the owner
-        opens it, cannot tell the phone from the source at a glance, and goes
-        back to asking somebody. Since this sheet exists precisely because
-        they will not use a dashboard, looking like one thing they will use
-        is not decoration.
-
-        Applied only on the same condition as the header: the tab was empty.
-        Re-applying on every deploy would undo an owner who widened a column
-        or picked their own colour, and they did that because it is their
-        sheet.
+        A default Sheets tab is unlabelled columns of grey -- the owner opens
+        it, cannot tell the phone from the source at a glance, and goes back
+        to asking somebody. Since this sheet exists precisely because they
+        will not use a dashboard, looking like one thing they will use is not
+        decoration.
 
         Failures here are swallowed. A tab that works but looks plain is a
         far better outcome than a lead that was not written because styling
         it went wrong.
         """
-        gid = await self._worksheet_id(client)
-        if gid is None:
-            return
         try:
             await self._call(
                 client, "POST", ":batchUpdate", json={"requests": _style_requests(gid)}
@@ -357,52 +395,52 @@ class SheetsMirror:
         except SheetsError as exc:
             logger.warning("sheets_styling_skipped error=%s", exc)
 
-    async def _worksheet_id(self, client: httpx.AsyncClient) -> int | None:
-        body = await self._call(
-            client, "GET", "", params={"fields": "sheets.properties(sheetId,title)"}
-        )
-        for sheet in body.get("sheets", []):
-            properties = sheet.get("properties", {})
-            if properties.get("title") == self._worksheet:
-                sheet_id: int = properties["sheetId"]
-                return sheet_id
-        return None
-
-    async def append(self, client: httpx.AsyncClient, row: LeadRow, recorded_at: datetime) -> None:
+    async def append(
+        self, client: httpx.AsyncClient, worksheet: str, row: LeadRow, recorded_at: datetime
+    ) -> None:
         await self._call(
             client,
             "POST",
-            f"/values/{self._worksheet}!A:{_LAST_COLUMN}:append",
+            f"/values/{worksheet}!A:{_LAST_COLUMN}:append",
             params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
             json={"values": [row.as_cells(recorded_at)]},
         )
 
     async def update_row(
-        self, client: httpx.AsyncClient, row_number: int, row: LeadRow, recorded_at: datetime
+        self,
+        client: httpx.AsyncClient,
+        worksheet: str,
+        row_number: int,
+        row: LeadRow,
+        recorded_at: datetime,
     ) -> None:
-        """Rewrite one row in place, for a patient the clinic already has.
+        """Rewrite one row in place, for a patient already on this day's tab.
 
         A name or a phone usually arrives a few turns after the first
         message. Appending again would give the owner the same person twice,
         once without their number.
 
-        The write starts at column B, so the date stays as it was: it says
-        when this patient first wrote in, and moving it every time they send
-        another message would turn the column into "last seen" — which is
-        not the question the owner is scanning it for.
+        The write starts at column B, so the time stays as it was: it says
+        when they first wrote in today, and moving it on every message would
+        turn it into "last seen" -- not the question being asked of it.
         """
         await self._call(
             client,
             "PUT",
-            f"/values/{self._worksheet}!B{row_number}:{_LAST_COLUMN}{row_number}",
+            f"/values/{worksheet}!B{row_number}:{_LAST_COLUMN}{row_number}",
             params={"valueInputOption": "RAW"},
-            # Column A is excluded from the range above, so the leading date
+            # Column A is excluded from the range above, so the leading time
             # cell here is dropped rather than written.
             json={"values": [row.as_cells(recorded_at)[1:]]},
         )
 
-    async def find_row(self, client: httpx.AsyncClient, key: str) -> int | None:
+    async def find_row(self, client: httpx.AsyncClient, worksheet: str, key: str) -> int | None:
         """The 1-based row holding `key` in the phone column, if any.
+
+        Only within this day's tab. A patient who writes again next week is a
+        new line on next week's day, which is what "who wrote in on the 29th"
+        means; matching across tabs would quietly move them off the day they
+        actually wrote.
 
         Reading the column rather than remembering a row number, because the
         sheet is the owner's: they sort it, they insert a line, they delete
@@ -414,7 +452,7 @@ class SheetsMirror:
         body = await self._call(
             client,
             "GET",
-            f"/values/{self._worksheet}!{_PHONE_COLUMN}:{_PHONE_COLUMN}",
+            f"/values/{worksheet}!{_PHONE_COLUMN}:{_PHONE_COLUMN}",
             params={"majorDimension": "COLUMNS"},
         )
         columns = body.get("values") or [[]]
@@ -424,15 +462,16 @@ class SheetsMirror:
         return None
 
     async def upsert(self, row: LeadRow) -> None:
-        """Put this lead in the sheet, once."""
+        """Put this lead on today's tab, once."""
         recorded_at = datetime.now(UTC)
+        day = recorded_at.astimezone(CLINIC_TIMEZONE).date()
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-            await self.ensure_header(client)
-            existing = await self.find_row(client, row.phone or "")
+            worksheet = await self.worksheet_for(client, day)
+            existing = await self.find_row(client, worksheet, row.phone or "")
             if existing is not None:
-                await self.update_row(client, existing, row, recorded_at)
+                await self.update_row(client, worksheet, existing, row, recorded_at)
                 return
-            await self.append(client, row, recorded_at)
+            await self.append(client, worksheet, row, recorded_at)
 
 
 @lru_cache

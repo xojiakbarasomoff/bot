@@ -9,7 +9,7 @@ broken sheet.
 import asyncio
 import base64
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
@@ -49,12 +49,11 @@ def _mirror(handler: Any) -> tuple[SheetsMirror, list[httpx.Request]]:
     settings = isolated_settings(
         google_service_account_json=NOT_A_KEY,
         google_sheets_spreadsheet_id="sheet-1",
-        google_sheets_worksheet="Lidlar",
     )
     mirror = SheetsMirror.__new__(SheetsMirror)
     mirror._credentials = _FakeCredentials()  # type: ignore[assignment]
     mirror._spreadsheet_id = settings.google_sheets_spreadsheet_id  # type: ignore[assignment]
-    mirror._worksheet = settings.google_sheets_worksheet
+    mirror._known_worksheets = set()  # type: ignore[assignment]
     return mirror, []
 
 
@@ -62,41 +61,31 @@ def _mirror(handler: Any) -> tuple[SheetsMirror, list[httpx.Request]]:
 
 
 NOON = datetime(2026, 8, 28, 12, 30, tzinfo=CLINIC_TIMEZONE)
+# The tab a lead recorded at NOON belongs on.
+TAB = "2026-08-28"
 
 
 def test_the_columns_are_the_ones_the_clinic_asked_for() -> None:
     row = LeadRow(name="Nodira Karimova", phone="998901234567", source="telegram", comment="tish")
 
     assert row.as_cells(NOON) == [
-        "2026-08-28 12:30",
+        "12:30",
         "Nodira Karimova",
         "998901234567",
         "telegram",
         "tish",
     ]
-    assert HEADER == ("Sana", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
+    assert HEADER == ("Vaqt", "Ism familiya", "Telefon", "Manba", "Bemor haqida qisqacha")
 
 
-def test_the_date_is_written_in_the_clinics_own_time_not_utc() -> None:
+def test_the_time_is_written_in_the_clinics_own_zone_not_utc() -> None:
     """The owner reads this at the front desk, so 12:30 has to mean 12:30
-    there — a UTC timestamp would put every morning lead on the previous day
-    five hours earlier.
+    there. In UTC the same lead reads 07:30, which on a morning message would
+    put it on the wrong day entirely.
     """
     row = LeadRow(name=None, phone="1", source="telegram", comment=None)
 
-    assert row.as_cells(datetime(2026, 8, 28, 7, 30, tzinfo=UTC))[0] == "2026-08-28 12:30"
-
-
-def test_the_date_sorts_chronologically_as_text() -> None:
-    """A filter sorts a text column alphabetically. YYYY-MM-DD is the format
-    where that is also the right order.
-    """
-    earlier = LeadRow(None, "1", "telegram", None).as_cells(
-        datetime(2026, 8, 9, 9, 0, tzinfo=CLINIC_TIMEZONE)
-    )[0]
-    later = LeadRow(None, "2", "telegram", None).as_cells(NOON)[0]
-
-    assert earlier < later
+    assert row.as_cells(datetime(2026, 8, 28, 7, 30, tzinfo=UTC))[0] == "12:30"
 
 
 def test_a_missing_name_or_number_is_an_empty_cell_not_the_word_none() -> None:
@@ -104,7 +93,7 @@ def test_a_missing_name_or_number_is_an_empty_cell_not_the_word_none() -> None:
     column reads as a person called None.
     """
     assert LeadRow(name=None, phone=None, source="instagram", comment=None).as_cells(NOON) == [
-        "2026-08-28 12:30",
+        "12:30",
         "",
         "",
         "instagram",
@@ -191,8 +180,8 @@ async def test_a_new_lead_is_appended_under_a_header_written_once() -> None:
 
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await mirror.ensure_header(client)
-        await mirror.append(client, LeadRow("N", "998901234567", "telegram", "tish"), NOON)
+        await mirror.ensure_header(client, TAB, 0)
+        await mirror.append(client, TAB, LeadRow("N", "998901234567", "telegram", "tish"), NOON)
 
     methods = [method for method, _ in seen]
     # GET the header row, PUT it, GET the sheet ids, POST the styling,
@@ -211,7 +200,7 @@ async def test_a_tab_that_already_has_a_header_is_left_alone() -> None:
 
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await mirror.ensure_header(client)
+        await mirror.ensure_header(client, TAB, 0)
 
     assert calls == ["GET"]
 
@@ -233,10 +222,10 @@ async def test_a_number_already_in_the_sheet_updates_that_row(monkeypatch: Any) 
 
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        found = await mirror.find_row(client, "998901234567")
+        found = await mirror.find_row(client, TAB, "998901234567")
         assert found == 2
         await mirror.update_row(
-            client, found, LeadRow("Nodira", "998901234567", "telegram", "x"), NOON
+            client, TAB, found, LeadRow("Nodira", "998901234567", "telegram", "x"), NOON
         )
 
     assert written and written[0].startswith("PUT")
@@ -248,9 +237,9 @@ async def test_a_number_that_is_not_there_yet_is_not_matched() -> None:
 
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        assert await mirror.find_row(client, "998901234567") is None
+        assert await mirror.find_row(client, TAB, "998901234567") is None
         # A lead with no number at all must never match the header row.
-        assert await mirror.find_row(client, "") is None
+        assert await mirror.find_row(client, TAB, "") is None
 
 
 async def test_googles_refusal_is_raised_with_enough_to_act_on() -> None:
@@ -262,7 +251,7 @@ async def test_googles_refusal_is_raised_with_enough_to_act_on() -> None:
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(SheetsError, match="403"):
-            await mirror.ensure_header(client)
+            await mirror.ensure_header(client, TAB, 0)
 
 
 # --- never at the patient's expense -----------------------------------------
@@ -378,25 +367,19 @@ async def test_styling_a_tab_never_costs_the_clinic_a_lead(
     mirror, _ = _mirror(handler)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with caplog.at_level("WARNING", logger="app"):
-            await mirror.ensure_header(client)
-        await mirror.append(client, LeadRow("N", "1", "telegram", "x"), NOON)
+            await mirror.ensure_header(client, TAB, 0)
+        await mirror.append(client, TAB, LeadRow("N", "1", "telegram", "x"), NOON)
 
     assert "sheets_styling_skipped" in caplog.text
     assert calls[-1] == "POST"  # the row still went in
 
 
-def test_the_empty_columns_to_the_right_are_removed() -> None:
-    """A new tab is 26 columns wide. The five that carry anything then sit
-    against a grey field three times their width, which is what the sheet
-    looked like when the clinic first opened it.
+def test_styling_does_not_try_to_delete_columns_that_were_never_created() -> None:
+    """A tab is created exactly as wide as the header, so there is nothing to
+    delete. Asking anyway fails the whole batch — which is how a day's tab
+    once ended up created but unformatted.
     """
-    deletes = [r["deleteDimension"] for r in _style_requests(0) if "deleteDimension" in r]
-
-    assert len(deletes) == 1
-    assert deletes[0]["range"]["dimension"] == "COLUMNS"
-    # Everything from the first unused column onward, with no end index.
-    assert deletes[0]["range"]["startIndex"] == len(HEADER)
-    assert "endIndex" not in deletes[0]["range"]
+    assert not [r for r in _style_requests(0) if "deleteDimension" in r]
 
 
 def test_a_rewrite_leaves_the_date_the_lead_first_arrived_alone() -> None:
@@ -415,11 +398,148 @@ def test_a_rewrite_leaves_the_date_the_lead_first_arrived_alone() -> None:
 
     async def _run() -> None:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            await mirror.update_row(client, 4, LeadRow("N", "1", "telegram", "x"), NOON)
+            await mirror.update_row(client, TAB, 4, LeadRow("N", "1", "telegram", "x"), NOON)
 
     asyncio.run(_run())
 
     url, body = written[0]
     # The range starts at B, and the payload carries four cells, not five.
     assert "!B4:E4" in url
-    assert "2026-08-28" not in body
+    assert "12:30" not in body
+
+
+# --- a tab per day ----------------------------------------------------------
+
+
+async def test_a_day_with_no_tab_yet_gets_one_named_after_it() -> None:
+    """The whole point of the change: the owner clicks the 29th and sees the
+    people who wrote in on the 29th, instead of scrolling three weeks of a
+    single list.
+    """
+    created: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and "fields=sheets.properties" in url:
+            return httpx.Response(200, json={"sheets": []})
+        if url.endswith(":batchUpdate"):
+            body = json.loads(request.content)
+            add = body["requests"][0].get("addSheet")
+            if add is not None:
+                created.append(add["properties"]["title"])
+                return httpx.Response(
+                    200, json={"replies": [{"addSheet": {"properties": {"sheetId": 7}}}]}
+                )
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        title = await mirror.worksheet_for(client, date(2026, 8, 29))
+
+    assert title == "2026-08-29"
+    assert created == ["2026-08-29"]
+
+
+async def test_a_day_that_already_has_a_tab_is_not_created_again() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(f"{request.method} {url}")
+        if request.method == "GET" and "fields=sheets.properties" in url:
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 3, "title": "2026-08-29"}}]}
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"values": [list(HEADER)]})
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await mirror.worksheet_for(client, date(2026, 8, 29))
+
+    assert not any(":batchUpdate" in call for call in calls)
+
+
+async def test_a_busy_day_reads_the_tab_list_once() -> None:
+    """A worker answering forty messages on a Tuesday should not ask Google
+    forty times which tabs exist.
+    """
+    listings = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal listings
+        url = str(request.url)
+        if request.method == "GET" and "fields=sheets.properties" in url:
+            listings += 1
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 3, "title": "2026-08-29"}}]}
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"values": [list(HEADER)]})
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(5):
+            await mirror.worksheet_for(client, date(2026, 8, 29))
+
+    assert listings == 1
+
+
+async def test_tomorrow_is_a_different_tab() -> None:
+    """The cache is keyed by date, so midnight is not something anybody has
+    to remember to handle.
+    """
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and "fields=sheets.properties" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "sheets": [
+                        {"properties": {"sheetId": 3, "title": "2026-08-29"}},
+                        {"properties": {"sheetId": 4, "title": "2026-08-30"}},
+                    ]
+                },
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"values": [list(HEADER)]})
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        seen.append(await mirror.worksheet_for(client, date(2026, 8, 29)))
+        seen.append(await mirror.worksheet_for(client, date(2026, 8, 30)))
+
+    assert seen == ["2026-08-29", "2026-08-30"]
+
+
+async def test_a_new_tab_is_created_only_as_wide_as_the_columns_it_needs() -> None:
+    """Otherwise every day would arrive 26 columns wide and the styling pass
+    would have to delete 21 of them each morning.
+    """
+    widths: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and "fields=sheets.properties" in url:
+            return httpx.Response(200, json={"sheets": []})
+        if url.endswith(":batchUpdate"):
+            body = json.loads(request.content)
+            add = body["requests"][0].get("addSheet")
+            if add is not None:
+                widths.append(add["properties"]["gridProperties"]["columnCount"])
+                return httpx.Response(
+                    200, json={"replies": [{"addSheet": {"properties": {"sheetId": 7}}}]}
+                )
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await mirror.worksheet_for(client, date(2026, 8, 29))
+
+    assert widths == [len(HEADER)]

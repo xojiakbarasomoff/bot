@@ -212,10 +212,6 @@ class Settings(BaseSettings):
     google_sheets_spreadsheet_id: str | None = Field(
         default=None, alias="GOOGLE_SHEETS_SPREADSHEET_ID"
     )
-    # The tab within it. One tab for both channels, with a column saying
-    # which one a lead came from — that is the sheet the clinic asked for,
-    # and splitting it in two would make "how many leads this week" a sum.
-    google_sheets_worksheet: str = Field(default="Lidlar", alias="GOOGLE_SHEETS_WORKSHEET")
     qwen_model: str = Field(default="Qwen/Qwen3-235B-A22B-Instruct-2507", alias="QWEN_MODEL")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: str | None = Field(default=None, alias="GEMINI_API_KEY")
