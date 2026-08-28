@@ -356,7 +356,18 @@ class SheetsMirror:
             f"/values/{VIEW_SHEET}!A1:{_LAST_COLUMN}1",
             params={"majorDimension": "ROWS"},
         )
-        if not existing.get("values"):
+        # Matching, not merely present.
+        #
+        # "Is there anything in row 1?" was the check, and it let a sheet
+        # left over from an older layout through untouched: the header stayed
+        # as it was, the styling was skipped, and a real patient's lead
+        # landed two columns to the right of where anyone would look for it.
+        # Any header that is not this one is a sheet from a different design,
+        # and it is rewritten.
+        header = [str(cell).strip() for cell in (existing.get("values") or [[]])[0]]
+        if header != list(HEADER):
+            if header:
+                logger.warning("sheets_header_replaced found=%s", header)
             await self._call(
                 client,
                 "PUT",

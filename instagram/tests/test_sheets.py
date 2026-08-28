@@ -17,6 +17,7 @@ import pytest
 from app.services.sheets import (
     HEADER,
     MAX_COMMENT,
+    VIEW_SHEET,
     LeadRow,
     SheetsError,
     SheetsMirror,
@@ -53,7 +54,7 @@ def _mirror(handler: Any) -> tuple[SheetsMirror, list[httpx.Request]]:
     mirror = SheetsMirror.__new__(SheetsMirror)
     mirror._credentials = _FakeCredentials()  # type: ignore[assignment]
     mirror._spreadsheet_id = settings.google_sheets_spreadsheet_id  # type: ignore[assignment]
-    mirror._known_worksheets = set()  # type: ignore[assignment]
+    mirror._ready = False  # type: ignore[assignment]
     return mirror, []
 
 
@@ -401,3 +402,32 @@ def test_a_day_becomes_the_serial_sheets_actually_stores() -> None:
     """
     assert _sheets_serial(date(1899, 12, 31)) == 1
     assert _sheets_serial(date(2026, 8, 31)) == 46265
+
+
+async def test_a_sheet_left_over_from_an_older_layout_is_rewritten() -> None:
+    """A real patient was lost to this.
+
+    The check used to be "is row 1 empty?", so a sheet still carrying the
+    old picker layout -- "Sana:" in A1 -- was treated as already set up. The
+    header was left alone, the styling was skipped, and the lead landed two
+    columns right of where anyone reads. Any header that is not the current
+    one belongs to a design that is gone.
+    """
+    written: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and "/values/" in str(request.url):
+            return httpx.Response(200, json={"values": [["Sana:", "", "Telefon"]]})
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 0, "title": VIEW_SHEET}}]}
+            )
+        if request.method == "PUT":
+            written.extend(json.loads(request.content)["values"])
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await mirror._ensure_sheet(client)
+
+    assert written == [list(HEADER)]
