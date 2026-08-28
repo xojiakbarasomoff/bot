@@ -46,7 +46,13 @@ from app.services.conversation_signals import find_phone_number
 from app.services.debounce import join_messages, pop_batch_if_current_generation
 from app.services.delivery import send_reply
 from app.services.reminders import send_due_reminders
-from app.services.sheets import LeadRow, mirror_lead, summarise_problem
+from app.services.sheets import (
+    AppointmentRow,
+    LeadRow,
+    mirror_appointment,
+    mirror_lead,
+    summarise_problem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +219,25 @@ async def process_inbound_message(
                 # the delivery error it runs beside.
                 if lead is not None:
                     await mirror_lead(lead)
+                # The booking itself, with the time on it. The lead list
+                # says somebody wants to come; the appointment book says
+                # when, with whom, and whether anyone has confirmed it --
+                # which is what the front desk works from in the morning.
+                if appointment is not None:
+                    await mirror_appointment(
+                        AppointmentRow(
+                            appointment_id=appointment.id,
+                            created_at=appointment.created_at or datetime.now(UTC),
+                            scheduled_at=appointment.scheduled_at,
+                            patient_name=appointment.patient_name,
+                            phone=appointment.patient_phone or phone,
+                            doctor=appointment.doctor_name,
+                            channel=str(channel.type) if channel is not None else "web",
+                            client_id=sender_external_id,
+                            status=appointment.status,
+                            note=summarise_problem(patient_said),
+                        )
+                    )
 
             # Recorded only when it actually went out: a reply in the
             # transcript the patient never received would make the next

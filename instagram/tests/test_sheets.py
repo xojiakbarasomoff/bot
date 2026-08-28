@@ -8,16 +8,20 @@ broken sheet.
 
 import base64
 import json
-from datetime import date
+import uuid
+from datetime import UTC, date, datetime
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
 
 from app.services.sheets import (
+    APPOINTMENT_HEADER,
     HEADER,
     MAX_COMMENT,
     VIEW_SHEET,
+    AppointmentRow,
     LeadRow,
     SheetsError,
     SheetsMirror,
@@ -431,3 +435,112 @@ async def test_a_sheet_left_over_from_an_older_layout_is_rewritten() -> None:
         await mirror._ensure_sheet(client)
 
     assert written == [list(HEADER)]
+
+
+# --- the appointment book -------------------------------------------------
+
+BOOKING = uuid.UUID("3f2504e0-4f89-11d3-9a0c-0305e82c3301")
+
+
+def _appointment(**over: object) -> AppointmentRow:
+    fields: dict[str, object] = {
+        "appointment_id": BOOKING,
+        "created_at": datetime(2026, 8, 29, 9, 5, tzinfo=UTC),
+        "scheduled_at": datetime(2026, 9, 2, 9, 30, tzinfo=UTC),  # 14:30 Toshkent
+        "patient_name": "Erkin Shodmonov",
+        "phone": "771997272",
+        "doctor": "Dr. Aliyev A.A.",
+        "channel": "instagram",
+        "client_id": "17841400000",
+        "status": "scheduled",
+    }
+    fields.update(over)
+    return AppointmentRow(**fields)  # type: ignore[arg-type]
+
+
+def test_the_booking_carries_the_time_it_was_agreed_for() -> None:
+    """The whole point of the appointment book. A date alone tells the front
+    desk somebody is coming; the time tells them when to expect them.
+    """
+    head = _appointment().head_cells()
+
+    assert head[4] == "2026-09-02"
+    assert head[5] == "14:30"  # 09:30 UTC in the clinic's own time zone
+    assert head[6] == "Dr. Aliyev A.A."
+
+
+def test_the_reference_is_the_same_every_time_for_one_booking() -> None:
+    """A retry has to find the row it already wrote. A counted number --
+    MED-1001, MED-1002 -- would be read off the sheet and could be handed to
+    two bookings a second apart; this one falls out of the booking's own id.
+    """
+    assert _appointment().reference == _appointment(status="confirmed").reference
+    assert _appointment().reference.startswith("MED-")
+
+
+def test_the_phone_is_written_in_the_shape_the_column_documents() -> None:
+    """+998XXXXXXXXX. A patient types nine digits; the clinic dials twelve."""
+    # The apostrophe is Sheets' own escape: without it USER_ENTERED reads a
+    # leading "+" as a formula and the country code is lost to arithmetic.
+    assert _appointment().head_cells()[3] == "'+998771997272"
+    assert _appointment(phone="+998 90 111 22 33").head_cells()[3] == "'+998901112233"
+    assert _appointment(phone=None).head_cells()[3] == ""
+
+
+def test_statuses_and_channels_are_written_in_the_sheets_own_words() -> None:
+    """The sheet's dropdown offers "Kutilmoqda", not "scheduled". A status
+    outside the list reads as invalid to the person filtering on it.
+    """
+    tail = _appointment().tail_cells()
+
+    assert tail[0] == "Instagram"
+    assert tail[2] == "Kutilmoqda"
+    assert _appointment(status="cancelled").tail_cells()[2] == "Bekor qilindi"
+    assert _appointment(status="no_show").tail_cells()[2] == "Kelmadi"
+
+
+def test_the_service_column_is_left_for_a_person_to_fill() -> None:
+    """The assistant agrees a time, not a procedure. Guessing a billable
+    service from "tishim og'riyapti" is how somebody is charged for
+    something nobody offered them.
+    """
+    assert _appointment().service_cell() == [""]
+    assert _appointment(service="EKG").service_cell() == ["EKG"]
+
+
+async def test_the_formula_columns_are_never_written_over() -> None:
+    """H and J hold one spilled ARRAYFORMULA each. A value written into a
+    spilled cell does not overwrite it -- it turns the whole column into
+    #REF!, for every appointment at once. So the bot writes around them.
+    """
+    ranges: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if request.method == "GET" and "/values/" in url and "A1:O1" in url:
+            return httpx.Response(200, json={"values": [list(APPOINTMENT_HEADER)]})
+        if request.method == "GET" and "/values/" in url:
+            return httpx.Response(200, json={"values": [["Qabul_ID"]]})
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"sheets": [{"properties": {"sheetId": 0, "title": "Qabullar"}}]}
+            )
+        if "append" in url:
+            return httpx.Response(200, json={"updates": {"updatedRange": "Qabullar!A2:G2"}})
+        if "values:batchUpdate" in url:
+            body = json.loads(request.content)
+            ranges.extend(entry["range"] for entry in body["data"])
+        return httpx.Response(200, json={})
+
+    mirror, _ = _mirror(handler)
+    mirror._appointments_ready = False  # type: ignore[attr-defined]
+    real_client = httpx.AsyncClient
+
+    def fake(*args: object, **kwargs: object) -> httpx.AsyncClient:
+        return real_client(transport=httpx.MockTransport(handler))
+
+    with patch("app.services.sheets.httpx.AsyncClient", fake):
+        await mirror.upsert_appointment(_appointment())
+
+    assert ranges == ["Qabullar!A2:G2", "Qabullar!I2", "Qabullar!K2:O2"]
+    assert not any("H" in written or "J" in written for written in ranges)

@@ -27,9 +27,11 @@ import base64
 import binascii
 import json
 import logging
+import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from functools import lru_cache
 from typing import Any, cast
 
@@ -38,6 +40,7 @@ import httpx
 from google.oauth2 import service_account
 
 from app.core.config import Settings, get_settings
+from app.services.appointment import CLINIC_TIMEZONE
 from app.services.conversation_signals import looks_like_a_phone_number
 
 logger = logging.getLogger(__name__)
@@ -63,6 +66,61 @@ _PHONE_COLUMN = "C"
 # How the date is shown. The value underneath is a real date whatever this
 # says; this only decides what the clinic reads.
 _DATE_FORMAT = "dd.MM.yyyy"
+
+# The appointment book, on its own sheet.
+#
+# Separate from the lead list because they answer different questions. A
+# lead is "somebody wrote, ring them"; an appointment is "this person is
+# expected at this time" -- it has a doctor, a slot and a status that moves.
+APPOINTMENT_SHEET = "Qabullar"
+
+APPOINTMENT_HEADER = (
+    "Qabul_ID",
+    "Yozilgan_Vaqti",
+    "Bemor_F_I_Sh",
+    "Telefon_Raqami",
+    "Qabul_Sanasi",
+    "Qabul_Vaqti",
+    "Shifokor",
+    "Mutaxassislik",
+    "Xizmat_Turi",
+    "Xizmat_Narxi",
+    "Kanal",
+    "Mijoz_ID",
+    "Status",
+    "Bekor_Qilish_Sababi",
+    "Izoh_Eslatma",
+)
+
+# H (Mutaxassislik) and J (Xizmat_Narxi) are never written.
+#
+# They hold one ARRAYFORMULA each, in row 2, spilling down every row --
+# which is the only shape that reaches a row the bot has not created yet.
+# Writing a value into a spilled cell does not overwrite it, it breaks it:
+# the whole column turns into #REF! for every appointment at once. So the
+# bot writes around them, in three ranges rather than one.
+_APPOINTMENT_HEAD = "A:G"
+_APPOINTMENT_SERVICE = "I"
+_APPOINTMENT_TAIL = "K:O"
+
+# The clinic reads Uzbek, and these are the words in its own dropdowns --
+# the Sozlamalar sheet is the single source of both, so a status written
+# here always matches one the sheet offers.
+STATUS_LABELS = {
+    "scheduled": "Kutilmoqda",
+    "confirmed": "Tasdiqlandi",
+    "cancelled": "Bekor qilindi",
+    "completed": "Yakunlandi",
+    "no_show": "Kelmadi",
+}
+
+CHANNEL_LABELS = {
+    "telegram": "Telegram",
+    "instagram": "Instagram",
+    "web": "Web",
+    "operator": "Qo'ng'iroq",
+    "phone": "Qo'ng'iroq",
+}
 
 # How far down the number formats are applied.
 #
@@ -300,6 +358,89 @@ def _load_credentials(raw: str) -> service_account.Credentials:
         raise SheetsError(f"Not a usable service account key: {exc}") from exc
 
 
+@dataclass(frozen=True)
+class AppointmentRow:
+    """One booking, as the appointment book records it."""
+
+    appointment_id: uuid.UUID
+    created_at: datetime
+    scheduled_at: datetime
+    patient_name: str | None
+    phone: str | None
+    doctor: str
+    channel: str
+    client_id: str | None
+    status: str
+    service: str | None = None
+    cancel_reason: str | None = None
+    note: str | None = None
+
+    @property
+    def reference(self) -> str:
+        """The clinic-facing code, derived rather than counted.
+
+        A running number -- MED-1001, MED-1002 -- would have to be read off
+        the sheet and incremented, which two bookings a second apart can do
+        at the same time and land on the same code. This one falls out of
+        the appointment's own id, so the same booking always produces the
+        same reference: a retry updates its row instead of adding a second.
+        """
+        return f"MED-{self.appointment_id.hex[:6].upper()}"
+
+    def head_cells(self) -> list[str]:
+        """A-G. Written as text Sheets parses: the date and time columns are
+        formatted as a real date and a real time, so "2026-09-02" and "14:30"
+        become values the filter and the Dashboard can count."""
+        local = self.scheduled_at.astimezone(CLINIC_TIMEZONE)
+        return [
+            self.reference,
+            f"{self.created_at.astimezone(CLINIC_TIMEZONE):%Y-%m-%d %H:%M}",
+            self.patient_name or "",
+            # Leading apostrophe: Sheets reads a cell that starts with "+"
+            # as a formula, exactly as it reads "=", so USER_ENTERED turned
+            # +998771997272 into the number 998771997272 and the clinic lost
+            # the country code. The apostrophe is the sheet's own way of
+            # saying "this is text"; it is consumed on the way in and never
+            # appears in the cell.
+            f"'{_e164(self.phone)}" if self.phone else "",
+            f"{local:%Y-%m-%d}",
+            f"{local:%H:%M}",
+            self.doctor,
+        ]
+
+    def service_cell(self) -> list[str]:
+        """I. Empty for a booking the assistant took: it agrees a time, not a
+        procedure, and guessing a billable service from a complaint is how a
+        patient is charged for something nobody offered them."""
+        return [self.service or ""]
+
+    def tail_cells(self) -> list[str]:
+        comment = (self.note or "").strip().replace(chr(10), " ")
+        if len(comment) > MAX_COMMENT:
+            comment = comment[: MAX_COMMENT - 1].rstrip() + "\u2026"
+        return [
+            CHANNEL_LABELS.get(self.channel.lower(), "Web"),
+            str(self.client_id or ""),
+            STATUS_LABELS.get(self.status, self.status),
+            self.cancel_reason or "",
+            comment,
+        ]
+
+
+def _e164(phone: str | None) -> str:
+    """+998XXXXXXXXX, which is the only shape the column is documented to hold.
+
+    Stored as text, so the leading + survives -- a number-formatted cell
+    drops it, and a number nobody can dial is worse than an empty one.
+    """
+    digits = "".join(character for character in (phone or "") if character.isdigit())
+    if not digits:
+        return ""
+    if len(digits) == 9:
+        digits = f"998{digits}"
+    return f"+{digits}"
+
+
 class SheetsMirror:
     """Appends leads to one worksheet of one spreadsheet."""
 
@@ -316,6 +457,7 @@ class SheetsMirror:
         # Whether the sheet has been checked this process. A flag rather
         # than a request, because this runs before every lead.
         self._ready = False
+        self._appointments_ready = False
 
     def _token(self) -> str:
         # google-auth refreshes only when the current token is close to
@@ -484,6 +626,103 @@ class SheetsMirror:
                 return index
         return None
 
+    async def _ensure_appointment_sheet(self, client: httpx.AsyncClient) -> None:
+        if self._appointments_ready:
+            return
+        sheets = await self.worksheet_ids(client)
+        if APPOINTMENT_SHEET not in sheets:
+            sheets[APPOINTMENT_SHEET] = await self._create_worksheet(client, APPOINTMENT_SHEET)
+        existing = await self._call(
+            client,
+            "GET",
+            f"/values/{APPOINTMENT_SHEET}!A1:O1",
+            params={"majorDimension": "ROWS"},
+        )
+        header = [str(cell).strip() for cell in (existing.get("values") or [[]])[0]]
+        if header != list(APPOINTMENT_HEADER):
+            if header:
+                logger.warning("sheets_appointment_header_replaced found=%s", header)
+            await self._call(
+                client,
+                "PUT",
+                f"/values/{APPOINTMENT_SHEET}!A1:O1",
+                params={"valueInputOption": "RAW"},
+                json={"values": [list(APPOINTMENT_HEADER)]},
+            )
+        self._appointments_ready = True
+
+    async def find_appointment_row(self, client: httpx.AsyncClient, reference: str) -> int | None:
+        """The row holding this reference, so a status change rewrites the
+        booking the clinic already has rather than adding a second one."""
+        body = await self._call(
+            client,
+            "GET",
+            f"/values/{APPOINTMENT_SHEET}!A:A",
+            params={"majorDimension": "ROWS"},
+        )
+        for index, values in enumerate(body.get("values") or [], start=1):
+            if values and str(values[0]).strip() == reference:
+                return index
+        return None
+
+    async def _write_appointment(
+        self, client: httpx.AsyncClient, row_number: int, row: AppointmentRow
+    ) -> None:
+        """The three ranges the bot owns, in one request.
+
+        Three rather than one because H and J hold spilled formulas; one
+        request rather than three because a booking half-written is a
+        booking the front desk cannot act on.
+        """
+        await self._call(
+            client,
+            "POST",
+            "/values:batchUpdate",
+            json={
+                "valueInputOption": "USER_ENTERED",
+                "data": [
+                    {
+                        "range": f"{APPOINTMENT_SHEET}!A{row_number}:G{row_number}",
+                        "values": [row.head_cells()],
+                    },
+                    {
+                        "range": f"{APPOINTMENT_SHEET}!I{row_number}",
+                        "values": [row.service_cell()],
+                    },
+                    {
+                        "range": f"{APPOINTMENT_SHEET}!K{row_number}:O{row_number}",
+                        "values": [row.tail_cells()],
+                    },
+                ],
+            },
+        )
+
+    async def upsert_appointment(self, row: AppointmentRow) -> None:
+        """Put this booking in the appointment book, once.
+
+        The row is allocated by appending the head columns and reading back
+        which row Google used, rather than by counting rows ourselves: two
+        bookings taken in the same second would otherwise pick the same one
+        and the second would overwrite the first.
+        """
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            await self._ensure_appointment_sheet(client)
+            existing = await self.find_appointment_row(client, row.reference)
+            if existing is None:
+                appended = await self._call(
+                    client,
+                    "POST",
+                    f"/values/{APPOINTMENT_SHEET}!{_APPOINTMENT_HEAD}:append",
+                    params={"valueInputOption": "USER_ENTERED"},
+                    json={"values": [row.head_cells()]},
+                )
+                updated = appended.get("updates", {}).get("updatedRange", "")
+                existing = _row_number(updated)
+                if existing is None:  # pragma: no cover - Google always says
+                    logger.error("sheets_appointment_row_unknown range=%s", updated)
+                    return
+            await self._write_appointment(client, existing, row)
+
     async def upsert(self, row: LeadRow) -> None:
         """Put this lead on the list, once."""
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
@@ -499,6 +738,12 @@ class SheetsMirror:
 # number rather than the text on screen. Matching on it avoids having to
 # guess how the spreadsheet's locale renders a date back to us.
 _SHEETS_EPOCH = date(1899, 12, 30)
+
+
+def _row_number(updated_range: str) -> int | None:
+    """The row out of "Qabullar!A5:G5"."""
+    match = re.search(r"![A-Z]+(\d+)", updated_range)
+    return int(match.group(1)) if match else None
 
 
 def _sheets_serial(day: date) -> int:
@@ -539,6 +784,24 @@ async def mirror_lead(row: LeadRow) -> None:
         logger.error("sheets_mirror_failed error=%s", exc)
     except Exception:
         logger.exception("sheets_mirror_failed")
+
+
+async def mirror_appointment(row: AppointmentRow) -> None:
+    """Send one booking to the clinic's appointment book, if there is one.
+
+    Never raises, for the same reason mirror_lead does not: the patient has
+    been told their time and the row is already in the database. A
+    spreadsheet that is briefly behind is not worth failing a job over.
+    """
+    mirror = get_mirror()
+    if mirror is None:
+        return
+    try:
+        await mirror.upsert_appointment(row)
+    except SheetsError as exc:
+        logger.error("sheets_appointment_failed error=%s", exc)
+    except Exception:
+        logger.exception("sheets_appointment_failed")
 
 
 # Openings, acknowledgements and bare numbers — the messages that say

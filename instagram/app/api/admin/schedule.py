@@ -35,6 +35,7 @@ from app.services.appointment import (
     confirm_appointment,
     create_appointment,
 )
+from app.services.sheets import AppointmentRow, mirror_appointment
 
 router = APIRouter(prefix="/api/admin", tags=["Admin — Schedule"])
 
@@ -142,6 +143,32 @@ async def create(
     return _out(appointment)
 
 
+async def _mirror(appointment: Appointment, *, reason: str | None = None) -> None:
+    """Keep the clinic's spreadsheet saying what the dashboard says.
+
+    An operator who cancels here and then opens the sheet has to see it
+    cancelled; two records of the same appointment disagreeing is how
+    somebody gets rung about a visit that is not happening. Never raises --
+    the booking is already changed in the database, and a spreadsheet that
+    is briefly behind is not worth failing the request over.
+    """
+    await mirror_appointment(
+        AppointmentRow(
+            appointment_id=appointment.id,
+            created_at=appointment.created_at,
+            scheduled_at=appointment.scheduled_at,
+            patient_name=appointment.patient_name,
+            phone=appointment.patient_phone,
+            doctor=appointment.doctor_name,
+            channel=appointment.source,
+            client_id=None,
+            status=appointment.status,
+            cancel_reason=reason,
+            note=appointment.notes,
+        )
+    )
+
+
 async def _load(session: AsyncSession, appointment_id: uuid.UUID) -> Appointment:
     appointment = await AppointmentRepository(session).get(appointment_id)
     if appointment is None:
@@ -163,6 +190,7 @@ async def cancel(
     appointment = await _load(session, appointment_id)
     await cancel_appointment(repo, appointment)
     await session.commit()
+    await _mirror(appointment, reason="Mijoz bekor qildi")
     return _out(appointment)
 
 
@@ -183,6 +211,7 @@ async def confirm(
     appointment = await _load(session, appointment_id)
     await confirm_appointment(repo, appointment)
     await session.commit()
+    await _mirror(appointment)
     return _out(appointment)
 
 
