@@ -1,44 +1,67 @@
-# Qabullar kalendari — Google Apps Script Web App
+# Qabullar kalendari
 
-Bitta `Qabullar` varag'i o'zgarmaydi. Filtrlash serverda (`getAppointmentsByDate`),
-ko'rsatish brauzerda — sahifa qayta yuklanmaydi.
+Ma'lumot bitta joyda — `Qabullar` varag'ida, kelish tartibida. Sana bo'yicha
+bo'lish varaqlarda emas, ustida turgan interfeysda bo'ladi.
 
-## Fayllar
+Ikkita variant bor. **Birinchisi ishlab turibdi va hech qanday deploy talab
+qilmaydi.**
 
-| Fayl | Vazifasi |
-|---|---|
-| `Code.gs` | `doGet`, `getAppointmentsByDate(dateString)`, `getMonthSummary(year, month)`, `refreshCache`, sana/vaqt normallashtirish |
-| `Index.html` | Sahifa skeleti (Tailwind CDN) |
-| `css.html` | Kalendar katakchalari va yuklanish animatsiyasi |
-| `js.html` | Kalendar, `google.script.run`, holatlar (loading / empty / error) |
-| `appsscript.json` | Manifest — vaqt mintaqasi `Asia/Tashkent` |
+---
 
-## O'rnatish (5 daqiqa)
+## 1. `Kalendar` varag'i — jadval ichida (FAOL)
 
-1. Google Sheet (`Klinika — Lidlar`) ni oching → **Kengaytmalar → Apps Script**.
-2. Chapdagi `+` orqali fayllarni yarating va shu papkadagi mazmunni ko'chiring:
-   - `Code.gs` (mavjud `Code.gs` ustiga yozing)
-   - `Index` → **HTML** fayl
-   - `css` → **HTML** fayl
-   - `js` → **HTML** fayl
-   > Fayl nomlari aynan shunday bo'lishi shart — `include('css')` shu nomlarni chaqiradi.
-3. ⚙️ **Loyiha sozlamalari** → *"appsscript.json manifest faylini ko'rsatish"* ni yoqing,
-   `appsscript.json` mazmunini almashtiring (vaqt mintaqasi `Asia/Tashkent`).
-4. **Deploy → New deployment → Web app**:
-   - *Execute as*: **Me** (skript sizning nomingizdan varaqni o'qiydi)
-   - *Who has access*: **Anyone with Google account** — bemor ma'lumotlari,
-     shuning uchun `Anyone` (anonim) qilmang.
-5. **Authorize access** → hisobingizni tanlang → *Advanced → Go to project (unsafe)* → **Allow**.
-6. Chiqqan `https://script.google.com/macros/s/.../exec` havolasini administratorga bering.
+Google Sheet'ni ochasiz, birinchi varaq — `Kalendar`. Oylik kalendardan kunni
+bosasiz, pastda o'sha kundagi bemorlar chiqadi.
 
-## Kodni o'zgartirgandan keyin
+| Element | Joyi | Nima qiladi |
+|---|---|---|
+| Sana katakchasi | `B3` | Hamma narsa shunga bog'langan |
+| Hisoblagichlar | `E3`, `G3` | O'sha kundagi jami / tasdiqlangan |
+| Oy nomi | `J3` | O'zbekcha, `B3` dagi oyga qarab |
+| Kalendar to'ri | `J6:P11` | Bosilsa `B3` ga sana yoziladi |
+| Bemorlar ro'yxati | `A6` | `FILTER` + `SORT`, vaqt bo'yicha |
 
-**Deploy → Manage deployments → ✏️ → Version: New version → Deploy.**
-Aks holda eski versiya ochilib turaveradi.
+Ranglar: **yashil** — tanlangan kun, **qalin ko'k** — o'sha kunda qabul bor,
+kulrang — qo'shni oyning kunlari. Ro'yxatda yashil qator — tasdiqlangan,
+qizil va chizilgan — bekor qilingan.
 
-## Eslatmalar
+Kun bo'sh bo'lsa: *"Ushbu sanada bemorlar qabuli mavjud emas"*.
 
-- `Qabul_Sanasi` varaqda haqiqiy sana (Date) — server uni `YYYY-MM-DD` ga
-  keltiradi, shuning uchun `02.09.2026`, `2026-09-02` va formatlanmagan
-  seriya raqami ham bir xil ishlaydi.
-- Ma'lumotlar 20 soniya keshlanadi; **Yangilash** tugmasi keshni tozalaydi.
+### Fayllar
+
+- `Kalendar.gs` — jadvalga ulangan skript (`onSelectionChange` + `onOpen`).
+  Sheet → **Kengaytmalar → Apps Script** ichida turibdi, nomi *Klinika kalendar*.
+- `build_calendar_tab.py` — varaqni noldan quradigan skript. Layout buzilsa
+  qayta ishga tushirilsa, `Kalendar` varag'i to'liq tiklanadi.
+
+### Nima uchun formulalar, kod emas
+
+`FILTER` sana o'zgarishi bilan **darhol** ishlaydi — skript chaqirilmaydi,
+kutish yo'q, kvota sarflanmaydi. Skript faqat bitta ish qiladi: bosilgan
+katakchadagi sanani `B3` ga ko'chiradi.
+
+---
+
+## 2. Web App — alohida sahifa (TAYYOR, lekin deploy qilinmagan)
+
+Agar administrator jadvalni umuman ko'rmasin desangiz: `Code.gs`, `Index.html`,
+`css.html`, `js.html` — Tailwind'li alohida veb-sahifa, o'sha `Qabullar`
+varag'ini o'qiydi.
+
+**O'rnatish:** Sheet → Kengaytmalar → Apps Script → fayllarni aynan shu nomlar
+bilan yarating → **Deploy → New deployment → Web app** → *Execute as:* **Me**,
+*Who has access:* **Anyone with Google account** (anonim qilmang — bemor
+ma'lumotlari). Kod o'zgarsa: **Manage deployments → ✏️ → New version**.
+
+> Diqqat: bu variant 1-variant bilan bitta Apps Script loyihasida turolmaydi —
+> `Code.gs` nomi to'qnashadi. Kerak bo'lsa alohida loyiha yarating.
+
+## Sana formati haqida
+
+`Qabul_Sanasi` — haqiqiy sana (Date), ko'rinishi `2026-09-02` bo'lsa ham.
+Shuning uchun:
+
+- `onOpen` `B3` ga **vaqtsiz** sana yozadi — vaqti bor sana hech qachon teng
+  chiqmaydi va ro'yxat bo'sh ko'rinardi;
+- Web App tarafda `normaliseDate_()` `Date`, `"02.09.2026"` va seriya raqamini
+  bir xil ISO satrga keltiradi.
