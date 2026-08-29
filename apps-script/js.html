@@ -1,0 +1,276 @@
+<script>
+  (function () {
+    'use strict';
+
+    var MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+                  'Iyul', 'Avgust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
+    var WEEKDAYS = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba',
+                    'Payshanba', 'Juma', 'Shanba'];
+
+    // The sheet's own words, from the Sozlamalar dropdowns.
+    var STATUS_STYLES = {
+      'Kutilmoqda':    'bg-amber-50 text-amber-700 ring-amber-200',
+      'Tasdiqlandi':   'bg-emerald-50 text-emerald-700 ring-emerald-200',
+      'Bekor qilindi': 'bg-rose-50 text-rose-700 ring-rose-200',
+      'Yakunlandi':    'bg-sky-50 text-sky-700 ring-sky-200',
+      'Kelmadi':       'bg-slate-100 text-slate-600 ring-slate-200'
+    };
+
+    var todayIso = toIso(new Date());
+    var selected = todayIso;
+    var viewYear = new Date().getFullYear();
+    var viewMonth = new Date().getMonth() + 1;   // 1-12
+    var counts = {};
+
+    // Every request carries a token. A slow answer for a day the user has
+    // already clicked away from is dropped instead of painting stale rows.
+    var pending = 0;
+
+    var el = {
+      grid: document.getElementById('calendar-grid'),
+      monthLabel: document.getElementById('month-label'),
+      selectedLabel: document.getElementById('selected-label'),
+      selectedSub: document.getElementById('selected-sub'),
+      stats: document.getElementById('stats'),
+      results: document.getElementById('results'),
+      loading: document.getElementById('loading'),
+      empty: document.getElementById('empty'),
+      error: document.getElementById('error'),
+      refreshIcon: document.getElementById('refresh-icon')
+    };
+
+    /* ------------------------------------------------------------ dates */
+
+    function pad(value, width) {
+      var text = String(value);
+      while (text.length < width) { text = '0' + text; }
+      return text;
+    }
+
+    /** A local date as "YYYY-MM-DD" — never toISOString(), which shifts to UTC
+        and hands back yesterday for anyone east of Greenwich, Tashkent included. */
+    function toIso(date) {
+      return pad(date.getFullYear(), 4) + '-' + pad(date.getMonth() + 1, 2) + '-' + pad(date.getDate(), 2);
+    }
+
+    function fromIso(iso) {
+      var parts = iso.split('-');
+      return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    }
+
+    function humanDate(iso) {
+      var date = fromIso(iso);
+      return date.getDate() + '-' + MONTHS[date.getMonth()].toLowerCase() + ', ' + date.getFullYear();
+    }
+
+    /* -------------------------------------------------------- rendering */
+
+    function renderCalendar() {
+      el.monthLabel.textContent = MONTHS[viewMonth - 1] + ' ' + viewYear;
+
+      var first = new Date(viewYear, viewMonth - 1, 1);
+      // Monday-first: JS counts Sunday as 0, the clinic's week starts Monday.
+      var lead = (first.getDay() + 6) % 7;
+      var start = new Date(viewYear, viewMonth - 1, 1 - lead);
+
+      var html = '';
+      for (var i = 0; i < 42; i++) {
+        var day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        var iso = toIso(day);
+        var classes = ['day'];
+        if (day.getMonth() !== viewMonth - 1) { classes.push('muted'); }
+        if (iso === todayIso) { classes.push('today'); }
+        if (iso === selected) { classes.push('selected'); }
+        html += '<button type="button" class="' + classes.join(' ') + '" data-date="' + iso + '">' +
+                  day.getDate() +
+                  (counts[iso] ? '<span class="dot"></span>' : '') +
+                '</button>';
+      }
+      el.grid.innerHTML = html;
+    }
+
+    function escapeHtml(value) {
+      return String(value === null || value === undefined ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function badge(status) {
+      var style = STATUS_STYLES[status] || 'bg-slate-100 text-slate-600 ring-slate-200';
+      return '<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ' +
+             style + '">' + escapeHtml(status || '—') + '</span>';
+    }
+
+    function field(label, value) {
+      if (!value) { return ''; }
+      return '<div><dt class="text-[11px] uppercase tracking-wide text-slate-400">' + label + '</dt>' +
+             '<dd class="mt-0.5 text-sm text-slate-700">' + escapeHtml(value) + '</dd></div>';
+    }
+
+    function card(row) {
+      var phone = row.Telefon_Raqami || '';
+      var price = row.Xizmat_Narxi;
+      var priceText = (price === '' || price === null || price === undefined)
+        ? '' : Number(price).toLocaleString('ru-RU') + ' so‘m';
+
+      return '' +
+        '<article class="card rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow">' +
+          '<div class="flex flex-wrap items-start justify-between gap-3">' +
+            '<div class="flex items-start gap-3">' +
+              '<div class="grid h-12 w-14 shrink-0 place-items-center rounded-xl bg-indigo-50 text-sm font-semibold text-indigo-700">' +
+                escapeHtml(row.Qabul_Vaqti || '--:--') +
+              '</div>' +
+              '<div>' +
+                '<h3 class="text-sm font-semibold text-slate-900">' + escapeHtml(row.Bemor_F_I_Sh || 'Ismi ko‘rsatilmagan') + '</h3>' +
+                '<p class="mt-0.5 text-xs text-slate-500">' + escapeHtml(row.Qabul_ID || '') +
+                  (row.Kanal ? ' · ' + escapeHtml(row.Kanal) : '') + '</p>' +
+                (phone ? '<a href="tel:' + escapeHtml(phone.replace(/\s/g, '')) + '" ' +
+                         'class="mt-1 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700">' +
+                         escapeHtml(phone) + '</a>' : '') +
+              '</div>' +
+            '</div>' +
+            badge(row.Status) +
+          '</div>' +
+          '<dl class="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-slate-100 pt-3 sm:grid-cols-4">' +
+            field('Shifokor', row.Shifokor) +
+            field('Mutaxassislik', row.Mutaxassislik) +
+            field('Xizmat', row.Xizmat_Turi) +
+            field('Narx', priceText) +
+          '</dl>' +
+          (row.Bekor_Qilish_Sababi
+            ? '<p class="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">Bekor qilish sababi: ' +
+              escapeHtml(row.Bekor_Qilish_Sababi) + '</p>' : '') +
+          (row.Izoh_Eslatma
+            ? '<p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">' +
+              escapeHtml(row.Izoh_Eslatma) + '</p>' : '') +
+        '</article>';
+    }
+
+    function renderStats(rows) {
+      var byStatus = {};
+      rows.forEach(function (row) {
+        var key = row.Status || '—';
+        byStatus[key] = (byStatus[key] || 0) + 1;
+      });
+      var html = '';
+      Object.keys(byStatus).forEach(function (status) {
+        html += '<div class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-center">' +
+                  '<div class="text-base font-semibold text-slate-900">' + byStatus[status] + '</div>' +
+                  '<div class="text-[11px] text-slate-500">' + escapeHtml(status) + '</div>' +
+                '</div>';
+      });
+      el.stats.innerHTML = html;
+    }
+
+    /* ---------------------------------------------------------- states */
+
+    function setBusy(busy) {
+      el.loading.classList.toggle('hidden', !busy);
+      el.refreshIcon.classList.toggle('spinning', busy);
+      if (busy) {
+        el.results.innerHTML = '';
+        el.empty.classList.add('hidden');
+        el.error.classList.add('hidden');
+        el.stats.innerHTML = '';
+        el.selectedSub.textContent = 'Ma’lumotlar yuklanmoqda…';
+      }
+    }
+
+    function showError(message) {
+      el.error.textContent = 'Xatolik: ' + message;
+      el.error.classList.remove('hidden');
+      el.selectedSub.textContent = 'Ma’lumot olinmadi';
+    }
+
+    /* ----------------------------------------------------------- loading */
+
+    function loadDay(iso) {
+      selected = iso;
+      renderCalendar();
+      el.selectedLabel.textContent = humanDate(iso);
+      setBusy(true);
+
+      var token = ++pending;
+      google.script.run
+        .withSuccessHandler(function (response) {
+          if (token !== pending) { return; }   // the user moved on
+          setBusy(false);
+          if (!response || !response.ok) {
+            showError((response && response.error) || 'noma’lum sabab');
+            return;
+          }
+          var rows = response.appointments || [];
+          var weekday = WEEKDAYS[fromIso(iso).getDay()];
+          el.selectedSub.textContent = weekday + ' · ' + rows.length + ' ta qabul';
+          renderStats(rows);
+          if (!rows.length) {
+            el.empty.classList.remove('hidden');
+            el.results.innerHTML = '';
+            return;
+          }
+          el.results.innerHTML = rows.map(card).join('');
+        })
+        .withFailureHandler(function (err) {
+          if (token !== pending) { return; }
+          setBusy(false);
+          showError(err && err.message ? err.message : String(err));
+        })
+        .getAppointmentsByDate(iso);
+    }
+
+    function loadMonth() {
+      google.script.run
+        .withSuccessHandler(function (response) {
+          counts = (response && response.ok && response.counts) || {};
+          renderCalendar();
+        })
+        .withFailureHandler(function () {
+          counts = {};                       // dots are a nicety, not the data
+          renderCalendar();
+        })
+        .getMonthSummary(viewYear, viewMonth);
+    }
+
+    function shiftMonth(delta) {
+      var cursor = new Date(viewYear, viewMonth - 1 + delta, 1);
+      viewYear = cursor.getFullYear();
+      viewMonth = cursor.getMonth() + 1;
+      renderCalendar();
+      loadMonth();
+    }
+
+    /* ------------------------------------------------------------ wiring */
+
+    el.grid.addEventListener('click', function (event) {
+      var button = event.target.closest('.day');
+      if (button && button.dataset.date !== selected) {
+        loadDay(button.dataset.date);
+      }
+    });
+
+    document.getElementById('prev-month').addEventListener('click', function () { shiftMonth(-1); });
+    document.getElementById('next-month').addEventListener('click', function () { shiftMonth(1); });
+
+    document.getElementById('today-btn').addEventListener('click', function () {
+      var today = new Date();
+      viewYear = today.getFullYear();
+      viewMonth = today.getMonth() + 1;
+      loadMonth();
+      loadDay(todayIso);
+    });
+
+    document.getElementById('refresh').addEventListener('click', function () {
+      // Clear the server cache first, otherwise "Yangilash" would re-show the
+      // same few-seconds-old snapshot the user is trying to get past.
+      el.refreshIcon.classList.add('spinning');
+      google.script.run
+        .withSuccessHandler(function () { loadMonth(); loadDay(selected); })
+        .withFailureHandler(function () { loadMonth(); loadDay(selected); })
+        .refreshCache();
+    });
+
+    renderCalendar();
+    loadMonth();
+    loadDay(selected);
+  })();
+</script>
