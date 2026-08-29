@@ -10,27 +10,24 @@ qilmaydi.**
 
 ## 1. `Kalendar` varag'i — jadval ichida (FAOL)
 
-Google Sheet'ni ochasiz, birinchi varaq — `Kalendar`. Oylik kalendardan kunni
-bosasiz, pastda o'sha kundagi bemorlar chiqadi.
+Google Sheet'ni ochasiz, birinchi varaq — `Kalendar`. Eng tepada sana turadi:
+bosasiz, ro'yxat ochiladi, kunni tanlaysiz — pastda o'sha kundagi bemorlar.
 
 | Element | Joyi | Nima qiladi |
 |---|---|---|
-| Sana katakchasi | `A6` (`TanlanganSana`) | Ochiladigan ro'yxat — hamma narsa shunga bog'langan |
-| Hisoblagichlar | `D6`, `F6` | O'sha kundagi jami / tasdiqlangan |
-| Bemorlar ro'yxati | `A9` | `FILTER` + `SORT`, vaqt bo'yicha |
-| Oy nomi | `J7` | O'zbekcha, tanlangan oyga qarab |
-| Kalendar to'ri | `J9:P14` | Bosilsa sana katakchasiga yoziladi |
+| Sana | `A2` (`TanlanganSana`) | Ochiladigan ro'yxat — hamma narsa shunga bog'langan |
+| Hisoblagichlar | `D2`, `F2` | O'sha kundagi jami / tasdiqlangan |
+| Bemorlar ro'yxati | `A5` | `FILTER` + `SORT`, vaqt bo'yicha |
 | Ro'yxat manbasi | `R` (yashirin) | Bir hafta oldin — bir oy keyin + band kunlar |
 
-Ranglar: **yashil** — tanlangan kun, **qalin ko'k** — o'sha kunda qabul bor,
-kulrang — qo'shni oyning kunlari. Ro'yxatda yashil qator — tasdiqlangan,
-qizil va chizilgan — bekor qilingan.
+Statuslar rangda: **yashil** tasdiqlangan, **sariq** kutilmoqda, **qizil**
+bekor qilingan (qatori xiralashib chiziladi), **ko'k** yakunlangan.
 
 Kun bo'sh bo'lsa: *"Ushbu sanada bemorlar qabuli mavjud emas"*.
 
 ### Fayllar
 
-- `Kalendar.gs` — jadvalga ulangan skript (`onSelectionChange` + `onOpen`).
+- `Kalendar.gs` — jadvalga ulangan skript (`onOpen`: ochilganda bugunga qaytadi).
   Sheet → **Kengaytmalar → Apps Script** ichida turibdi, nomi *Klinika kalendar*.
 - `build_calendar_tab.py` — varaqni noldan quradigan skript. Layout buzilsa
   qayta ishga tushirilsa, `Kalendar` varag'i to'liq tiklanadi.
