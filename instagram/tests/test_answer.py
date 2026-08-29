@@ -9,7 +9,11 @@ from app.core.config import Settings
 from app.rag.embeddings import EMBEDDING_DIMENSIONS, EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider
 from app.repositories.knowledge_base import KnowledgeBaseRepository
-from app.services.answer import NO_MATCH_RESPONSE, generate_answer
+from app.services.answer import (
+    NO_MATCH_RESPONSE,
+    NO_MATCH_RESPONSES,
+    generate_answer,
+)
 from app.services.guardrail import EMERGENCY_RESPONSES
 from tests.conftest import Seed, isolated_settings
 
@@ -350,7 +354,7 @@ async def test_no_match_response_asks_for_a_phone_number(
     with as_tenant(seed.tenant_a.id):
         result = await generate_answer(
             db_session,
-            "Do you offer teeth whitening?",
+            "Buyrak toshini olasizmi?",
             embedding_provider=embedding_provider,
             llm_provider=llm_provider,
             settings=_settings(),
@@ -358,7 +362,36 @@ async def test_no_match_response_asks_for_a_phone_number(
 
     assert result == NO_MATCH_RESPONSE
     assert llm_provider.calls == []
-    assert "phone number" in NO_MATCH_RESPONSE
+    assert "raqamingizni" in NO_MATCH_RESPONSE
+
+
+async def test_the_no_match_line_is_written_in_the_patients_own_script(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """This path never reaches the model, so nothing downstream can put the
+    reply back into the patient's language. It used to answer everyone in
+    English, which is the most machine-like thing the assistant did.
+    """
+    embedding_provider = FakeEmbeddingProvider(QUERY_VECTOR)
+    llm_provider = FakeLLMProvider()
+
+    async def ask(message: str) -> str:
+        with as_tenant(seed.tenant_a.id):
+            return await generate_answer(
+                db_session,
+                message,
+                embedding_provider=embedding_provider,
+                llm_provider=llm_provider,
+                settings=_settings(),
+            )
+
+    assert await ask("Сколько стоит приём уролога?") == NO_MATCH_RESPONSES["ru"]
+    assert await ask("Буйрагим оғрияпти") == NO_MATCH_RESPONSES["uz-cyrl"]
+    assert await ask("Qabulga yozilsam bo'ladimi?") == NO_MATCH_RESPONSES["uz-latn"]
+    # None of the three asked the model anything.
+    assert llm_provider.calls == []
 
 
 # --- what the clinic does and does not offer, and what a price costs ---

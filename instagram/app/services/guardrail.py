@@ -240,21 +240,26 @@ EMERGENCY_RESPONSES = {
 _UZBEK_CYRILLIC = frozenset("ўқғҳ")
 
 
-def emergency_response(user_message: str) -> str:
-    """The emergency line, in the alphabet the patient just used.
+def reply_script(user_message: str) -> str:
+    """Which of "uz-latn", "uz-cyrl", "ru" to answer a fixed line in.
 
-    A deliberately small rule rather than a language detector: this runs on
-    the path where somebody may be bleeding, and it has to be right and
-    instant, not clever. Anything not Cyrillic is answered in Uzbek Latin --
-    the clinic's own language, and the safer default than English for a
-    patient who wrote in something unrecognised.
+    A deliberately small rule rather than a language detector. It runs on the
+    paths that never reach the model -- the emergency line, the no-match line
+    -- where the answer has to be right and instant, not clever. Anything not
+    Cyrillic is answered in Uzbek Latin: the clinic's own language, and a
+    safer default than English for a patient who wrote something unrecognised.
     """
     lowered = user_message.lower()
     if any(letter in lowered for letter in _UZBEK_CYRILLIC):
-        return EMERGENCY_RESPONSES["uz-cyrl"]
+        return "uz-cyrl"
     if any("Ѐ" <= character <= "ӿ" for character in lowered):
-        return EMERGENCY_RESPONSES["ru"]
-    return EMERGENCY_RESPONSES["uz-latn"]
+        return "ru"
+    return "uz-latn"
+
+
+def emergency_response(user_message: str) -> str:
+    """The emergency line, in the alphabet the patient just used."""
+    return EMERGENCY_RESPONSES[reply_script(user_message)]
 
 
 class GuardrailClassifier(ABC):

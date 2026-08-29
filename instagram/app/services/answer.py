@@ -13,7 +13,12 @@ from app.services.booking import free_slots
 from app.services.booking import render as render_book
 from app.services.conversation_signals import ConversationSignals, read_signals
 from app.services.conversation_signals import render as render_signals
-from app.services.guardrail import GuardrailCategory, GuardrailClassifier, evaluate_guardrail
+from app.services.guardrail import (
+    GuardrailCategory,
+    GuardrailClassifier,
+    evaluate_guardrail,
+    reply_script,
+)
 
 # Shared opening of both system prompts below: who the assistant is, and how
 # it greets, sounds, and picks a language. Only the rule about where facts may
@@ -333,10 +338,35 @@ redirect to booking an appointment.\
 # global English string. Move it onto the Tenant (or a per-tenant settings
 # table) once clinics can configure their own wording, and pick a translation
 # from the detected language instead of always replying in English.
-NO_MATCH_RESPONSE = (
-    "I don't have that information here — could you leave your phone number? "
-    "A colleague from our team will call you back and help you directly."
-)
+# Said when nothing in the knowledge base answers the question and the model
+# is therefore never asked. It fires most often on the day a clinic's FAQ is
+# thin, or written for the clinic this one used to be -- exactly when a
+# patient is least forgiving -- so it answers in the patient's own script
+# rather than in English, which is what it did before and which reads as a
+# broken machine.
+NO_MATCH_RESPONSES = {
+    "uz-latn": (
+        "Buni aniq aytishim uchun ma'lumotim yetmayapti. Telefon raqamingizni "
+        "qoldirsangiz, hamkasbim qo'ng'iroq qilib, hammasini tushuntiradi."
+    ),
+    "uz-cyrl": (
+        "Буни аниқ айтишим учун маълумотим етмаяпти. Телефон рақамингизни "
+        "қолдирсангиз, ҳамкасбим қўнғироқ қилиб, ҳаммасини тушунтиради."
+    ),
+    "ru": (
+        "У меня нет точной информации по этому вопросу. Оставьте, пожалуйста, "
+        "номер телефона — коллега перезвонит и всё расскажет."
+    ),
+}
+
+# The clinic's own language, kept under a name because callers and tests
+# refer to "the" no-match reply.
+NO_MATCH_RESPONSE = NO_MATCH_RESPONSES["uz-latn"]
+
+
+def no_match_response(user_message: str) -> str:
+    """The no-match line, in the script the patient just wrote in."""
+    return NO_MATCH_RESPONSES[reply_script(user_message)]
 
 
 def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
@@ -490,7 +520,7 @@ async def generate_answer(
         # retrieved FAQs actually answer the specific thing the patient
         # asked — retrieval found something in the neighborhood, just not
         # the right thing.
-        return NO_MATCH_RESPONSE
+        return no_match_response(user_message)
 
     # Read before the model is asked anything: it offers times from this
     # list rather than working out what is free, so it cannot offer a slot
