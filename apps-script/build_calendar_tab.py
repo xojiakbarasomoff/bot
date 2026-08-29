@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
-"""A calendar the admin uses inside the spreadsheet itself.
+"""Build the "Kalendar" tab: a day picker the admin uses inside the sheet.
 
-No web app, no deploy: one "Kalendar" tab holding a date cell, a month grid
-that marks the days with bookings, and a list that follows the chosen day.
-The data still lives once, in Qabullar -- this tab only looks at it.
+Design notes, because a spreadsheet fights you on all three:
+
+* Rhythm. Row height is shared across the whole row, so the calendar on the
+  right and the patient list on the left cannot each have their own. Every
+  row below the spacer is therefore the same 30px, and the layout is built
+  to look deliberate at that height rather than fighting it.
+* Restraint. One accent (#1A73E8) and four greys. Colour is reserved for
+  the two things worth looking at: the chosen day and a booking's status.
+* Structure without boxes. No filled header bars and no cell borders on the
+  calendar -- hairline rules under the list rows carry the table instead.
+
+The date lives in a named range, not a cell address, so this layout can move
+again without breaking the bound script that writes into it.
 """
 import json
 import sys
@@ -16,6 +26,23 @@ KEY = r"C:\Users\Xojiakbar\Downloads\endless-orb-417118-5f147678cb2f.json"
 SID = "1GnX6KUhjYY085Hz1Vjyr7UQtOJM4vh6tZ5iTv-YRBJc"
 BASE = f"https://sheets.googleapis.com/v4/spreadsheets/{SID}"
 TAB = "Kalendar"
+NAMED = "TanlanganSana"
+
+# --------------------------------------------------------------- palette
+INK = "#202124"      # primary text
+MUTED = "#5F6368"    # secondary text
+FAINT = "#9AA0A6"    # labels
+LINE = "#E8EAED"     # rules and separators
+HAIR = "#F1F3F4"     # row hairlines / today's tint
+ACCENT = "#1A73E8"
+ACCENT_BG = "#E8F0FE"
+ACCENT_LINE = "#D2E3FC"
+GREEN, GREEN_BG = "#137333", "#E6F4EA"
+RED, RED_BG = "#C5221F", "#FCE8E6"
+AMBER, AMBER_BG = "#B06000", "#FEF7E0"
+WHITE = "#FFFFFF"
+
+FONT = "Roboto"
 
 creds = service_account.Credentials.from_service_account_file(
     KEY, scopes=["https://www.googleapis.com/auth/spreadsheets"]
@@ -29,18 +56,21 @@ CLIENT = httpx.Client(
 
 def rgb(h):
     h = h.lstrip("#")
-    return {
-        "red": int(h[0:2], 16) / 255,
-        "green": int(h[2:4], 16) / 255,
-        "blue": int(h[4:6], 16) / 255,
-    }
+    return {"red": int(h[0:2], 16) / 255,
+            "green": int(h[2:4], 16) / 255,
+            "blue": int(h[4:6], 16) / 255}
+
+
+def text(size=10, color=INK, bold=False, italic=False):
+    return {"fontFamily": FONT, "fontSize": size, "bold": bold,
+            "italic": italic, "foregroundColor": rgb(color)}
 
 
 def stage(name, requests):
     """One batch, named, so a refusal says which part failed.
 
-    batchUpdate is atomic -- a single bad request would otherwise take the
-    whole design with it, which is how formats have been lost here before.
+    batchUpdate is atomic: a single bad request would otherwise take the
+    whole design down with it, which is how formats were lost here before.
     """
     if not requests:
         return True
@@ -53,250 +83,255 @@ def stage(name, requests):
 
 
 # ------------------------------------------------------------------ tab
-meta = CLIENT.get(BASE, params={"fields": "sheets.properties"}).json()
+# conditionalFormats must be asked for by name: leave it out of the mask and
+# the old rules come back empty, survive the rebuild, and quietly fight the
+# new ones -- greying days that are not grey and painting rows that are gone.
+meta = CLIENT.get(BASE, params={
+    "fields": "namedRanges,sheets(properties,conditionalFormats)"}).json()
 tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]}
 
 if TAB not in tabs:
-    r = CLIENT.post(
-        f"{BASE}:batchUpdate",
-        json={"requests": [{"addSheet": {"properties": {
-            "title": TAB, "index": 0,
-            "gridProperties": {"rowCount": 200, "columnCount": 20, "frozenRowCount": 0},
-        }}}]},
-    )
+    r = CLIENT.post(f"{BASE}:batchUpdate", json={"requests": [{"addSheet": {"properties": {
+        "title": TAB, "index": 0,
+        "gridProperties": {"rowCount": 200, "columnCount": 20},
+    }}}]})
     r.raise_for_status()
     SHEET_ID = r.json()["replies"][0]["addSheet"]["properties"]["sheetId"]
     print(f"  [OK] '{TAB}' varag'i yaratildi")
 else:
     SHEET_ID = tabs[TAB]
-    print(f"  [i] '{TAB}' varag'i bor, qayta quriladi")
-    # Wipe it rather than patch it: a leftover cell from an older layout is
-    # how a stale header ended up shifting a real patient's row once.
-    stage("tozalash", [{"updateCells": {
-        "range": {"sheetId": SHEET_ID},
-        "fields": "userEnteredValue,userEnteredFormat,dataValidation",
-    }}])
-
-# ------------------------------------------------------------- formulas
-MONTHS = ("Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
-          "Iyul", "Avgust", "Sentyabr", "Oktyabr", "Noyabr", "Dekabr")
-month_label = '=CHOOSE(MONTH($B$3),' + ",".join(f'"{m}"' for m in MONTHS) + ')&" "&YEAR($B$3)'
-
-# The Monday before (or on) the first of the chosen month. WEEKDAY type 3
-# counts Monday as 0, which is the week the clinic actually works.
-GRID_ORIGIN = ("DATE(YEAR($B$3),MONTH($B$3),1)"
-               "-WEEKDAY(DATE(YEAR($B$3),MONTH($B$3),1),3)")
-# One formula for all 42 cells: ROW/COLUMN place each one itself.
-grid_cell = f"={GRID_ORIGIN}+(ROW()-6)*7+(COLUMN()-10)"
-
-# The list. Eight columns out of Qabullar, the day taken from B3, sorted by
-# time -- the order the front desk works in.
-patient_list = (
-    '=IFERROR('
-    'SORT('
-    'FILTER({Qabullar!F2:F,Qabullar!C2:C,Qabullar!D2:D,Qabullar!G2:G,'
-    'Qabullar!H2:H,Qabullar!I2:I,Qabullar!M2:M,Qabullar!K2:K},'
-    'Qabullar!E2:E=$B$3,Qabullar!A2:A<>"")'
-    ',1,TRUE)'
-    ',"Ushbu sanada bemorlar qabuli mavjud emas")'
-)
-
-rows = {
-    "A1": [["📅  QABULLAR KALENDARI"]],
-    "A3": [["Sanani tanlang:"]],
-    "B3": [["=TODAY()"]],
-    "D3": [["Jami qabul:"]],
-    "E3": [['=COUNTIF(Qabullar!E:E,$B$3)']],
-    "F3": [["Tasdiqlangan:"]],
-    "G3": [['=COUNTIFS(Qabullar!E:E,$B$3,Qabullar!M:M,"Tasdiqlandi")']],
-    "J3": [[month_label]],
-    "J4": [["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"]],
-    "A5": [["Vaqt", "Bemor F.I.Sh", "Telefon", "Shifokor",
-            "Mutaxassislik", "Xizmat", "Status", "Kanal"]],
-    "A6": [[patient_list]],
-    "J12": [["Qalin ko'k = qabul bor kun   •   Yashil = tanlangan kun"]],
-}
-grid_values = [[grid_cell] * 7 for _ in range(6)]
-
-data = [{"range": f"{TAB}!{cell}", "values": values} for cell, values in rows.items()]
-data.append({"range": f"{TAB}!J6:P11", "values": grid_values})
-
-r = CLIENT.post(
-    f"{BASE}/values:batchUpdate",
-    json={"valueInputOption": "USER_ENTERED", "data": data},
-)
-print("  [OK] formulalar" if r.status_code == 200 else f"  [XATO] formulalar: {r.text[:300]}")
+    reset = [
+        {"updateCells": {"range": {"sheetId": SHEET_ID},
+                         "fields": "userEnteredValue,userEnteredFormat,dataValidation"}},
+        {"unmergeCells": {"range": {"sheetId": SHEET_ID}}},
+    ]
+    # Old rules and old merges would survive a value wipe and quietly fight
+    # the new layout, so they go first.
+    for s in meta["sheets"]:
+        if s["properties"]["sheetId"] == SHEET_ID:
+            for i in range(len(s.get("conditionalFormats", [])) - 1, -1, -1):
+                reset.append({"deleteConditionalFormatRule": {"sheetId": SHEET_ID, "index": i}})
+    stage("eskisini tozalash", reset)
+    print(f"  [i] '{TAB}' qayta quriladi")
 
 
-# -------------------------------------------------------------- styling
 def span(r1, r2, c1, c2):
     return {"sheetId": SHEET_ID, "startRowIndex": r1, "endRowIndex": r2,
             "startColumnIndex": c1, "endColumnIndex": c2}
 
 
-def fmt(rng, cell, fields):
+# ------------------------------------------------------------- formulas
+MONTHS = ("Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
+          "Iyul", "Avgust", "Sentyabr", "Oktyabr", "Noyabr", "Dekabr")
+DAYS = ("Yakshanba", "Dushanba", "Seshanba", "Chorshanba",
+        "Payshanba", "Juma", "Shanba")
+
+month_label = "=CHOOSE(MONTH($A$6)," + ",".join(f'"{m}"' for m in MONTHS) + ')&" "&YEAR($A$6)'
+weekday_name = "=CHOOSE(WEEKDAY($A$6)," + ",".join(f'"{d}"' for d in DAYS) + ")"
+
+# The Monday on or before the first of the chosen month. WEEKDAY type 3
+# counts Monday as 0, which is the week the clinic actually works.
+ORIGIN = "DATE(YEAR($A$6),MONTH($A$6),1)-WEEKDAY(DATE(YEAR($A$6),MONTH($A$6),1),3)"
+# One formula for all 42 cells: ROW and COLUMN place each one itself.
+grid_cell = f"={ORIGIN}+(ROW()-4)*7+(COLUMN()-10)"
+
+# Eight columns out of Qabullar, filtered to the chosen day, earliest first.
+patient_list = (
+    '=IFERROR(SORT(FILTER('
+    '{Qabullar!F2:F,Qabullar!C2:C,Qabullar!D2:D,Qabullar!G2:G,'
+    'Qabullar!H2:H,Qabullar!I2:I,Qabullar!M2:M,Qabullar!K2:K},'
+    'Qabullar!E2:E=$A$6,Qabullar!A2:A<>"")'
+    ',1,TRUE),"Ushbu sanada bemorlar qabuli mavjud emas")'
+)
+
+values = {
+    "A2": [["Qabullar"]],
+    "A3": [["Kunlik qabullar ro'yxati"]],
+    "A5": [["TANLANGAN SANA"]],
+    "A6": [["=TODAY()"]],
+    "C6": [[weekday_name]],
+    "D5": [["JAMI QABUL"]],
+    "D6": [['=COUNTIF(Qabullar!E:E,$A$6)']],
+    "F5": [["TASDIQLANDI"]],
+    "F6": [['=COUNTIFS(Qabullar!E:E,$A$6,Qabullar!M:M,"Tasdiqlandi")']],
+    "J2": [[month_label]],
+    "J3": [["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"]],
+    "J4:P9": [[grid_cell] * 7 for _ in range(6)],
+    "J10": [["Ko'k — qabul bor kun.  Kunni bosing."]],
+    "A8": [["VAQT", "BEMOR", "TELEFON", "SHIFOKOR",
+            "MUTAXASSISLIK", "XIZMAT", "STATUS", "KANAL"]],
+    "A9": [[patient_list]],
+}
+r = CLIENT.post(f"{BASE}/values:batchUpdate", json={
+    "valueInputOption": "USER_ENTERED",
+    "data": [{"range": f"{TAB}!{cell}", "values": rows} for cell, rows in values.items()],
+})
+print("  [OK] formulalar" if r.status_code == 200 else f"  [XATO] formulalar: {r.text[:300]}")
+
+
+# --------------------------------------------------------------- layout
+def fmt(rng, cell, fields="userEnteredFormat"):
     return {"repeatCell": {"range": rng, "cell": {"userEnteredFormat": cell}, "fields": fields}}
 
 
-white = rgb("#FFFFFF")
+LABEL = {"textFormat": text(8, FAINT, bold=True), "verticalAlignment": "BOTTOM"}
 requests = [
-    # the whole sheet: no gridlines, plain white
     {"updateSheetProperties": {
-        "properties": {"sheetId": SHEET_ID, "hidden": False,
-                       "gridProperties": {"hideGridlines": True}},
-        "fields": "hidden,gridProperties.hideGridlines"}},
-    fmt(span(0, 200, 0, 20), {"backgroundColor": white}, "userEnteredFormat.backgroundColor"),
+        "properties": {"sheetId": SHEET_ID, "gridProperties": {"hideGridlines": True}},
+        "fields": "gridProperties.hideGridlines"}},
 
-    # title
-    {"mergeCells": {"range": span(0, 1, 0, 16), "mergeType": "MERGE_ALL"}},
-    fmt(span(0, 1, 0, 16), {
-        "backgroundColor": rgb("#1155CC"),
-        "horizontalAlignment": "LEFT", "verticalAlignment": "MIDDLE",
-        "padding": {"left": 12},
-        "textFormat": {"bold": True, "fontSize": 14, "foregroundColor": white},
-    }, "userEnteredFormat"),
+    # a clean white ground; everything below adds to this, nothing fights it
+    fmt(span(0, 200, 0, 20),
+        {"backgroundColor": rgb(WHITE), "textFormat": text(10, MUTED),
+         "verticalAlignment": "MIDDLE", "horizontalAlignment": "LEFT"}),
 
-    # the date cell -- the one thing the admin touches
-    fmt(span(2, 3, 1, 2), {
-        "backgroundColor": rgb("#FFF2CC"),
+    # masthead
+    {"mergeCells": {"range": span(1, 2, 0, 6), "mergeType": "MERGE_ALL"}},
+    fmt(span(1, 2, 0, 6), {"textFormat": text(16, INK, bold=True),
+                           "verticalAlignment": "MIDDLE"}),
+    {"mergeCells": {"range": span(2, 3, 0, 6), "mergeType": "MERGE_ALL"}},
+    fmt(span(2, 3, 0, 6), {"textFormat": text(9, FAINT), "verticalAlignment": "TOP"}),
+
+    # the three labels sit on the baseline above their values
+    fmt(span(4, 5, 0, 1), LABEL),
+    fmt(span(4, 5, 3, 4), LABEL),
+    fmt(span(4, 5, 5, 6), LABEL),
+
+    # the date -- the only cell anyone types into
+    {"mergeCells": {"range": span(5, 6, 0, 2), "mergeType": "MERGE_ALL"}},
+    fmt(span(5, 6, 0, 2), {
+        "backgroundColor": rgb(ACCENT_BG),
         "numberFormat": {"type": "DATE", "pattern": "dd.MM.yyyy"},
-        "horizontalAlignment": "CENTER",
-        "borders": {side: {"style": "SOLID_MEDIUM", "color": rgb("#F1C232")}
+        "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
+        "textFormat": text(13, ACCENT, bold=True),
+        "borders": {side: {"style": "SOLID", "color": rgb(ACCENT_LINE)}
                     for side in ("top", "bottom", "left", "right")},
-        "textFormat": {"bold": True, "fontSize": 12},
-    }, "userEnteredFormat"),
-    fmt(span(2, 3, 0, 1), {"horizontalAlignment": "RIGHT",
-                           "textFormat": {"bold": True}}, "userEnteredFormat"),
-    {"setDataValidation": {
-        "range": span(2, 3, 1, 2),
-        "rule": {"condition": {"type": "DATE_IS_VALID"},
-                 "inputMessage": "Sanani tanlang (ikki marta bosing)",
-                 "strict": True, "showCustomUi": True}}},
+    }),
+    {"setDataValidation": {"range": span(5, 6, 0, 2), "rule": {
+        "condition": {"type": "DATE_IS_VALID"},
+        "inputMessage": "Sanani tanlang yoki kalendardan bosing",
+        "strict": True, "showCustomUi": True}}},
+    fmt(span(5, 6, 2, 3), {"textFormat": text(9, FAINT), "padding": {"left": 8}}),
 
     # the two counters
-    fmt(span(2, 3, 3, 7), {"textFormat": {"bold": True},
-                           "horizontalAlignment": "CENTER"}, "userEnteredFormat"),
-    fmt(span(2, 3, 4, 5), {"backgroundColor": rgb("#CFE2F3")},
-        "userEnteredFormat.backgroundColor"),
-    fmt(span(2, 3, 6, 7), {"backgroundColor": rgb("#D9EAD3")},
-        "userEnteredFormat.backgroundColor"),
+    fmt(span(5, 6, 3, 4), {"textFormat": text(16, INK, bold=True)}),
+    fmt(span(5, 6, 5, 6), {"textFormat": text(16, GREEN, bold=True)}),
 
-    # month label + weekday strip
-    {"mergeCells": {"range": span(2, 3, 9, 16), "mergeType": "MERGE_ALL"}},
-    fmt(span(2, 3, 9, 16), {
-        "backgroundColor": rgb("#1155CC"), "horizontalAlignment": "CENTER",
-        "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": white},
-    }, "userEnteredFormat"),
-    fmt(span(3, 4, 9, 16), {
-        "backgroundColor": rgb("#CFE2F3"), "horizontalAlignment": "CENTER",
-        "textFormat": {"bold": True, "fontSize": 9},
-    }, "userEnteredFormat"),
+    # list header: no fill, one rule underneath -- a bar of colour here would
+    # compete with the status chips, which are the only colour worth reading
+    fmt(span(7, 8, 0, 8), {
+        "textFormat": text(8, FAINT, bold=True), "verticalAlignment": "BOTTOM",
+        "borders": {"bottom": {"style": "SOLID_MEDIUM", "color": rgb(LINE)}},
+    }),
 
-    # the grid: day numbers only, big enough to read at a glance
-    fmt(span(5, 11, 9, 16), {
+    # list body, dressed far past the last booking so tomorrow's row is
+    # already formatted when it appears
+    fmt(span(8, 200, 0, 8), {
+        "textFormat": text(10, MUTED), "verticalAlignment": "MIDDLE",
+        "borders": {"bottom": {"style": "SOLID", "color": rgb(HAIR)}},
+    }),
+    fmt(span(8, 200, 0, 1), {
+        "numberFormat": {"type": "DATE_TIME", "pattern": "HH:mm"},
+        "horizontalAlignment": "LEFT", "textFormat": text(10, ACCENT, bold=True),
+        "borders": {"bottom": {"style": "SOLID", "color": rgb(HAIR)}}}),
+    fmt(span(8, 200, 1, 2), {
+        "textFormat": text(10, INK, bold=True),
+        "borders": {"bottom": {"style": "SOLID", "color": rgb(HAIR)}}}),
+    fmt(span(8, 200, 6, 7), {
+        "horizontalAlignment": "CENTER", "textFormat": text(9, MUTED),
+        "borders": {"bottom": {"style": "SOLID", "color": rgb(HAIR)}}}),
+
+    # the calendar: month, weekdays, days, legend
+    {"mergeCells": {"range": span(1, 2, 9, 16), "mergeType": "MERGE_ALL"}},
+    fmt(span(1, 2, 9, 16), {"horizontalAlignment": "CENTER",
+                            "textFormat": text(12, INK, bold=True)}),
+    fmt(span(2, 3, 9, 16), {"horizontalAlignment": "CENTER",
+                            "textFormat": text(8, FAINT, bold=True)}),
+    fmt(span(3, 9, 9, 16), {
         "numberFormat": {"type": "DATE", "pattern": "d"},
         "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
-        "textFormat": {"fontSize": 11},
-        "borders": {side: {"style": "SOLID", "color": rgb("#E0E0E0")}
-                    for side in ("top", "bottom", "left", "right")},
-    }, "userEnteredFormat"),
-    fmt(span(11, 12, 9, 16), {"textFormat": {"fontSize": 8,
-                                             "foregroundColor": rgb("#666666")}},
-        "userEnteredFormat"),
-
-    # list header
-    fmt(span(4, 5, 0, 8), {
-        "backgroundColor": rgb("#1155CC"), "horizontalAlignment": "CENTER",
-        "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": white},
-    }, "userEnteredFormat"),
-    # the list body, formatted well past the last booking so a row added
-    # tomorrow is already dressed when it appears
-    fmt(span(5, 200, 0, 1), {
-        "numberFormat": {"type": "DATE_TIME", "pattern": "HH:mm"},
-        "horizontalAlignment": "CENTER",
-        "textFormat": {"bold": True},
-    }, "userEnteredFormat"),
-    fmt(span(5, 200, 6, 7), {"horizontalAlignment": "CENTER"}, "userEnteredFormat"),
-
-    {"updateSheetProperties": {
-        "properties": {"sheetId": SHEET_ID,
-                       "gridProperties": {"frozenRowCount": 5}},
-        "fields": "gridProperties.frozenRowCount"}},
+        "textFormat": text(11, INK)}),
+    {"mergeCells": {"range": span(9, 10, 9, 16), "mergeType": "MERGE_ALL"}},
+    fmt(span(9, 10, 9, 16), {"horizontalAlignment": "CENTER",
+                             "textFormat": text(8, FAINT), "verticalAlignment": "TOP"}),
 ]
 
-widths = [(0, 1, 70), (1, 2, 190), (2, 3, 130), (3, 4, 150), (4, 5, 130),
-          (5, 6, 150), (6, 7, 110), (7, 8, 90), (8, 9, 30)]
-for c1, c2, px in widths:
+# One height for every row: the two halves share rows, so a rhythm is the
+# only thing that keeps both readable.
+requests.append({"updateDimensionProperties": {
+    "range": {"sheetId": SHEET_ID, "dimension": "ROWS", "startIndex": 1, "endIndex": 200},
+    "properties": {"pixelSize": 30}, "fields": "pixelSize"}})
+requests.append({"updateDimensionProperties": {
+    "range": {"sheetId": SHEET_ID, "dimension": "ROWS", "startIndex": 0, "endIndex": 1},
+    "properties": {"pixelSize": 16}, "fields": "pixelSize"}})
+
+# ~1230px in total, so a laptop shows the picker and the day's patients at once.
+for c1, c2, px in [(0, 1, 100), (1, 2, 165), (2, 3, 115), (3, 4, 125), (4, 5, 105),
+                   (5, 6, 115), (6, 7, 95), (7, 8, 80), (8, 9, 22)]:
     requests.append({"updateDimensionProperties": {
-        "range": {"sheetId": SHEET_ID, "dimension": "COLUMNS",
-                  "startIndex": c1, "endIndex": c2},
+        "range": {"sheetId": SHEET_ID, "dimension": "COLUMNS", "startIndex": c1, "endIndex": c2},
         "properties": {"pixelSize": px}, "fields": "pixelSize"}})
 requests.append({"updateDimensionProperties": {
-    "range": {"sheetId": SHEET_ID, "dimension": "COLUMNS",
-              "startIndex": 9, "endIndex": 16},
-    "properties": {"pixelSize": 46}, "fields": "pixelSize"}})
-requests.append({"updateDimensionProperties": {
-    "range": {"sheetId": SHEET_ID, "dimension": "ROWS",
-              "startIndex": 5, "endIndex": 11},
-    "properties": {"pixelSize": 34}, "fields": "pixelSize"}})
-requests.append({"updateDimensionProperties": {
-    "range": {"sheetId": SHEET_ID, "dimension": "ROWS",
-              "startIndex": 0, "endIndex": 1},
-    "properties": {"pixelSize": 40}, "fields": "pixelSize"}})
+    "range": {"sheetId": SHEET_ID, "dimension": "COLUMNS", "startIndex": 9, "endIndex": 16},
+    "properties": {"pixelSize": 44}, "fields": "pixelSize"}})
 
 stage("dizayn", requests)
 
-# --------------------------------------------------- conditional formats
-# Order is load-bearing: Sheets applies the first rule that matches, so the
-# chosen day must be tested before "this day has bookings".
-GRID = span(5, 11, 9, 16)
-cf = [
-    ("=J6=$B$3", rgb("#34A853"), {"bold": True, "foregroundColor": white}),
-    ('=COUNTIF(INDIRECT("Qabullar!$E:$E"),J6)>0', rgb("#CFE2F3"),
-     {"bold": True, "foregroundColor": rgb("#1155CC")}),
-    ("=MONTH(J6)<>MONTH($B$3)", white, {"foregroundColor": rgb("#CCCCCC")}),
+# ------------------------------------------------------------ named range
+existing = {n["name"]: n["namedRangeId"] for n in meta.get("namedRanges", [])}
+named = [{"deleteNamedRange": {"namedRangeId": existing[NAMED]}}] if NAMED in existing else []
+named.append({"addNamedRange": {"namedRange": {
+    "name": NAMED, "range": span(5, 6, 0, 2)}}})
+stage("nomlangan diapazon", named)
+
+# ---------------------------------------------------- conditional formats
+# Sheets applies the first matching rule, so the order below is the design:
+# the chosen day outranks everything, a neighbouring month is always muted,
+# and only then does a day get marked as busy.
+GRID = span(3, 9, 9, 16)
+LIST = span(8, 200, 0, 8)
+STATUS = span(8, 200, 6, 7)
+# The cancelled row is dimmed everywhere except its status cell, which keeps
+# its own colour -- two rules must not fight over the same cell.
+ROW_NO_STATUS = [span(8, 200, 0, 6), span(8, 200, 7, 8)]
+
+
+
+
+def chip(color, bold=True, strikethrough=False):
+    """A conditional format carries no font or size -- only weight, slant,
+    strikethrough and the two colours. Anything else is refused outright."""
+    return {"bold": bold, "strikethrough": strikethrough,
+            "foregroundColor": rgb(color)}
+
+
+rules = [
+    ([GRID], "=J4=$A$6", ACCENT, chip(WHITE)),
+    ([GRID], "=MONTH(J4)<>MONTH($A$6)", WHITE, chip("#DADCE0", bold=False)),
+    ([GRID], '=COUNTIF(INDIRECT("Qabullar!$E:$E"),J4)>0', WHITE, chip(ACCENT)),
+    ([GRID], "=J4=TODAY()", HAIR, chip(INK, bold=False)),
+    ([STATUS], '=$G9="Tasdiqlandi"', GREEN_BG, chip(GREEN)),
+    ([STATUS], '=$G9="Bekor qilindi"', RED_BG, chip(RED)),
+    ([STATUS], '=$G9="Kutilmoqda"', AMBER_BG, chip(AMBER)),
+    ([STATUS], '=$G9="Yakunlandi"', ACCENT_BG, chip(ACCENT)),
+    (ROW_NO_STATUS, '=$G9="Bekor qilindi"', WHITE,
+     chip("#BDC1C6", bold=False, strikethrough=True)),
 ]
-existing = CLIENT.get(
-    BASE, params={"fields": "sheets(properties.sheetId,conditionalFormats)"}
-).json()
 requests = []
-for s in existing.get("sheets", []):
-    if s["properties"]["sheetId"] != SHEET_ID:
-        continue
-    for i in range(len(s.get("conditionalFormats", [])) - 1, -1, -1):
-        requests.append({"deleteConditionalFormatRule": {"sheetId": SHEET_ID, "index": i}})
-offset = len(requests)
-for index, (formula, background, text) in enumerate(cf):
-    requests.append({"addConditionalFormatRule": {"index": offset + index, "rule": {
-        "ranges": [GRID],
+for index, (ranges, formula, background, style) in enumerate(rules):
+    requests.append({"addConditionalFormatRule": {"index": index, "rule": {
+        "ranges": ranges,
         "booleanRule": {
             "condition": {"type": "CUSTOM_FORMULA",
                           "values": [{"userEnteredValue": formula}]},
-            "format": {"backgroundColor": background, "textFormat": text},
+            "format": {"backgroundColor": rgb(background), "textFormat": style},
         }}}})
-# and one on the list: a cancelled booking should not read like a live one
-requests.append({"addConditionalFormatRule": {"index": offset + len(cf), "rule": {
-    "ranges": [span(5, 200, 0, 8)],
-    "booleanRule": {
-        "condition": {"type": "CUSTOM_FORMULA",
-                      "values": [{"userEnteredValue": '=$G6="Bekor qilindi"'}]},
-        "format": {"backgroundColor": rgb("#F4CCCC"),
-                   "textFormat": {"strikethrough": True}},
-    }}}})
-requests.append({"addConditionalFormatRule": {"index": offset + len(cf) + 1, "rule": {
-    "ranges": [span(5, 200, 0, 8)],
-    "booleanRule": {
-        "condition": {"type": "CUSTOM_FORMULA",
-                      "values": [{"userEnteredValue": '=$G6="Tasdiqlandi"'}]},
-        "format": {"backgroundColor": rgb("#D9EAD3")},
-    }}}})
 stage("rang qoidalari", requests)
 
 # ------------------------------------------------------------- verify
-check = CLIENT.get(
-    f"{BASE}/values/{TAB}!A1:P20",
-    params={"valueRenderOption": "FORMATTED_VALUE"},
-).json()
-print("\n--- Kalendar (ko'rinishi) ---")
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+check = CLIENT.get(f"{BASE}/values/{TAB}!A1:P12",
+                   params={"valueRenderOption": "FORMATTED_VALUE"}).json()
+print("\n--- Kalendar ---")
 for line in check.get("values", []):
-    print(" | ".join(str(cell) for cell in line[:10]))
+    print(" | ".join(str(cell) for cell in line))
