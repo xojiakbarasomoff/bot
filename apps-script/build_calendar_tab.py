@@ -133,7 +133,7 @@ weekday_name = "=CHOOSE(WEEKDAY($A$6)," + ",".join(f'"{d}"' for d in DAYS) + ")"
 # counts Monday as 0, which is the week the clinic actually works.
 ORIGIN = "DATE(YEAR($A$6),MONTH($A$6),1)-WEEKDAY(DATE(YEAR($A$6),MONTH($A$6),1),3)"
 # One formula for all 42 cells: ROW and COLUMN place each one itself.
-grid_cell = f"={ORIGIN}+(ROW()-4)*7+(COLUMN()-10)"
+grid_cell = f"={ORIGIN}+(ROW()-9)*7+(COLUMN()-10)"
 
 # Eight columns out of Qabullar, filtered to the chosen day, earliest first.
 patient_list = (
@@ -154,10 +154,10 @@ values = {
     "D6": [['=COUNTIF(Qabullar!E:E,$A$6)']],
     "F5": [["TASDIQLANDI"]],
     "F6": [['=COUNTIFS(Qabullar!E:E,$A$6,Qabullar!M:M,"Tasdiqlandi")']],
-    "J2": [[month_label]],
-    "J3": [["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"]],
-    "J4:P9": [[grid_cell] * 7 for _ in range(6)],
-    "J10": [["Ko'k — qabul bor kun.  Kunni bosing."]],
+    "J7": [[month_label]],
+    "J8": [["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"]],
+    "J9:P14": [[grid_cell] * 7 for _ in range(6)],
+    "J15": [["Ko'k — qabul bor kun.  Kunni bosing."]],
     "A8": [["VAQT", "BEMOR", "TELEFON", "SHIFOKOR",
             "MUTAXASSISLIK", "XIZMAT", "STATUS", "KANAL"]],
     "A9": [[patient_list]],
@@ -242,17 +242,17 @@ requests = [
         "borders": {"bottom": {"style": "SOLID", "color": rgb(HAIR)}}}),
 
     # the calendar: month, weekdays, days, legend
-    {"mergeCells": {"range": span(1, 2, 9, 16), "mergeType": "MERGE_ALL"}},
-    fmt(span(1, 2, 9, 16), {"horizontalAlignment": "CENTER",
+    {"mergeCells": {"range": span(6, 7, 9, 16), "mergeType": "MERGE_ALL"}},
+    fmt(span(6, 7, 9, 16), {"horizontalAlignment": "CENTER",
                             "textFormat": text(12, INK, bold=True)}),
-    fmt(span(2, 3, 9, 16), {"horizontalAlignment": "CENTER",
+    fmt(span(7, 8, 9, 16), {"horizontalAlignment": "CENTER",
                             "textFormat": text(8, FAINT, bold=True)}),
-    fmt(span(3, 9, 9, 16), {
+    fmt(span(8, 14, 9, 16), {
         "numberFormat": {"type": "DATE", "pattern": "d"},
         "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE",
         "textFormat": text(11, INK)}),
-    {"mergeCells": {"range": span(9, 10, 9, 16), "mergeType": "MERGE_ALL"}},
-    fmt(span(9, 10, 9, 16), {"horizontalAlignment": "CENTER",
+    {"mergeCells": {"range": span(14, 15, 9, 16), "mergeType": "MERGE_ALL"}},
+    fmt(span(14, 15, 9, 16), {"horizontalAlignment": "CENTER",
                              "textFormat": text(8, FAINT), "verticalAlignment": "TOP"}),
 ]
 
@@ -288,7 +288,7 @@ stage("nomlangan diapazon", named)
 # Sheets applies the first matching rule, so the order below is the design:
 # the chosen day outranks everything, a neighbouring month is always muted,
 # and only then does a day get marked as busy.
-GRID = span(3, 9, 9, 16)
+GRID = span(8, 14, 9, 16)
 LIST = span(8, 200, 0, 8)
 STATUS = span(8, 200, 6, 7)
 # The cancelled row is dimmed everywhere except its status cell, which keeps
@@ -306,10 +306,10 @@ def chip(color, bold=True, strikethrough=False):
 
 
 rules = [
-    ([GRID], "=J4=$A$6", ACCENT, chip(WHITE)),
-    ([GRID], "=MONTH(J4)<>MONTH($A$6)", WHITE, chip("#DADCE0", bold=False)),
-    ([GRID], '=COUNTIF(INDIRECT("Qabullar!$E:$E"),J4)>0', WHITE, chip(ACCENT)),
-    ([GRID], "=J4=TODAY()", HAIR, chip(INK, bold=False)),
+    ([GRID], "=J9=$A$6", ACCENT, chip(WHITE)),
+    ([GRID], "=MONTH(J9)<>MONTH($A$6)", WHITE, chip("#DADCE0", bold=False)),
+    ([GRID], '=COUNTIF(INDIRECT("Qabullar!$E:$E"),J9)>0', WHITE, chip(ACCENT)),
+    ([GRID], "=J9=TODAY()", HAIR, chip(INK, bold=False)),
     ([STATUS], '=$G9="Tasdiqlandi"', GREEN_BG, chip(GREEN)),
     ([STATUS], '=$G9="Bekor qilindi"', RED_BG, chip(RED)),
     ([STATUS], '=$G9="Kutilmoqda"', AMBER_BG, chip(AMBER)),

@@ -8,8 +8,8 @@
 var TAB = 'Kalendar';
 var CELL = 'TanlanganSana';
 
-// Kalendar to'ri: J..P ustunlar (10..16), 4-qatordan 9-gacha.
-var GRID = {top: 4, bottom: 9, left: 10, right: 16};
+// Kalendar to'ri: J..P ustunlar (10..16), 9-qatordan 14-gacha.
+var GRID = {top: 9, bottom: 14, left: 10, right: 16};
 
 
 /**
