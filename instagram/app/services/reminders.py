@@ -35,7 +35,7 @@ from app.core.tenant_context import reset_current_tenant, set_current_tenant
 from app.models.appointment import ACTIVE_STATUSES, Appointment
 from app.models.message import MessageSender
 from app.models.user import User
-from app.services.appointment import CLINIC_TIMEZONE
+from app.services.appointment import CLINIC_TIMEZONE, UNASSIGNED_DOCTOR_NAME
 from app.services.conversation import record_outbound_message, reply_context_for
 from app.services.delivery import send_reply
 
@@ -49,6 +49,11 @@ class ReminderWindow:
     lead_time: timedelta
     flag: str
     template: str
+    # Used when no doctor has been assigned. The assistant books a time, not
+    # a person, so this is the ordinary case rather than the exception -- and
+    # the doctor template renders "Tayinlanmagan qabulida", which is what a
+    # patient actually received this morning.
+    template_unassigned: str
 
 
 # Ordered longest lead first — see _due_windows for why the order matters.
@@ -65,6 +70,10 @@ REMINDER_WINDOWS: tuple[ReminderWindow, ...] = (
             "Eslatma: ertaga, {date} kuni soat {time} da {doctor} qabulida "
             "ko'rikka yozilgansiz. Sizni kutamiz!"
         ),
+        template_unassigned=(
+            "Eslatma: ertaga, {date} kuni soat {time} da qabulga yozilgansiz. "
+            "Sizni kutamiz!"
+        ),
     ),
     ReminderWindow(
         lead_time=timedelta(hours=2),
@@ -72,6 +81,9 @@ REMINDER_WINDOWS: tuple[ReminderWindow, ...] = (
         template=(
             "Eslatma: bugun soat {time} da {doctor} qabulida ko'rikka "
             "kutilmoqdasiz. Sizni kutamiz!"
+        ),
+        template_unassigned=(
+            "Eslatma: bugun soat {time} da qabulga yozilgansiz. Sizni kutamiz!"
         ),
     ),
 )
@@ -118,10 +130,16 @@ def _due_windows(
 
 def _message(appointment: Appointment, window: ReminderWindow) -> str:
     local = appointment.scheduled_at.astimezone(CLINIC_TIMEZONE)
-    return window.template.format(
+    doctor = appointment.doctor_name
+    template = (
+        window.template_unassigned
+        if not doctor or doctor == UNASSIGNED_DOCTOR_NAME
+        else window.template
+    )
+    return template.format(
         date=local.strftime("%d.%m.%Y"),
         time=local.strftime("%H:%M"),
-        doctor=appointment.doctor_name,
+        doctor=doctor,
     )
 
 

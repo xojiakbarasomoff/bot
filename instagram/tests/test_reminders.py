@@ -9,6 +9,7 @@ worker was down when its fixed window passed.
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -24,7 +25,8 @@ from app.repositories.channel import ChannelRepository
 from app.repositories.conversation import ConversationRepository
 from app.repositories.message import MessageRepository
 from app.repositories.user import UserRepository
-from app.services.reminders import REMINDER_WINDOWS, send_due_reminders
+from app.services.appointment import UNASSIGNED_DOCTOR_NAME
+from app.services.reminders import REMINDER_WINDOWS, _message, send_due_reminders
 from app.workers.tasks import send_appointment_reminders
 from tests.conftest import Seed
 
@@ -404,3 +406,25 @@ def test_the_windows_are_ordered_longest_lead_first() -> None:
     """_due_windows relies on it: the last due window is the most urgent."""
     leads = [window.lead_time for window in REMINDER_WINDOWS]
     assert leads == sorted(leads, reverse=True)
+
+
+def test_a_reminder_names_no_doctor_when_none_was_assigned() -> None:
+    """The assistant books a time, not a person, so most appointments carry
+    the placeholder. Rendered into the doctor template it reached a real
+    patient as "Tayinlanmagan qabulida" -- "at the Unassigned's clinic".
+    """
+    when = datetime(2026, 8, 30, 4, 0, tzinfo=UTC)
+
+    for window in REMINDER_WINDOWS:
+        unassigned = _message(
+            SimpleNamespace(scheduled_at=when, doctor_name=UNASSIGNED_DOCTOR_NAME),
+            window,
+        )
+        blank = _message(SimpleNamespace(scheduled_at=when, doctor_name=None), window)
+        named = _message(SimpleNamespace(scheduled_at=when, doctor_name="Dr. Aliyev A.A."), window)
+
+        assert UNASSIGNED_DOCTOR_NAME not in unassigned
+        assert "09:00" in unassigned
+        assert unassigned == blank
+        # A doctor who is named is still named.
+        assert "Dr. Aliyev A.A." in named
