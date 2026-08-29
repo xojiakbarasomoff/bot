@@ -18,6 +18,7 @@ from app.services.guardrail import (
     GuardrailClassifier,
     evaluate_guardrail,
     reply_script,
+    review_reply,
 )
 
 # Shared opening of both system prompts below: who the assistant is, and how
@@ -541,4 +542,6 @@ async def generate_answer(
         *(history or []),
         ChatMessage(role="user", content=user_message),
     ]
-    return await provider.generate(system_prompt, conversation)
+    # Read once more on the way out. Everything above this line guards what
+    # the model is asked; this guards what it said, which nothing did before.
+    return review_reply(await provider.generate(system_prompt, conversation), user_message)

@@ -314,3 +314,87 @@ def evaluate_guardrail(
     if category is GuardrailCategory.MEDICAL_ADVICE:
         logger.info("guardrail_medical_advice_flagged")
     return GuardrailResult(category=category, fixed_response=None)
+
+
+# --------------------------------------------------------------- the reply
+#
+# Everything above guards the *question*. This guards the *answer*, which
+# until now nothing did: the model's text went straight to the patient, and
+# rule 3 of the system prompt was the only thing standing between a urology
+# patient and a dose. A prompt is a request; this is the part that holds.
+#
+# The patterns are deliberately narrow. A denylist of topic words would fire
+# on the assistant doing its job correctly -- "operatsiya kerakmi degan
+# savolga faqat shifokor javob bera oladi" is a refusal, and contains the
+# word "operatsiya". What is caught here is instruction: a dose, a schedule,
+# or telling somebody to take something.
+_PRESCRIPTION_PATTERNS: tuple[tuple[str, str], ...] = (
+    # a dose: a number next to a unit
+    ("doza", r"\d+\s*(?:mg|mg\.|ml|мг|мл|gr|г)\b"),
+    # a schedule: "kuniga 2 mahal", "2 раза в день", "3 marta"
+    (
+        "jadval",
+        r"kuniga\s*\d+|\d+\s*(?:mahal|marta)\s*(?:ich\w*|qabul)"
+        r"|\d+\s*раз[ау]?\s*в \s*день",
+    ),
+    # being told to take something
+    (
+        "ichish",
+        r"\b(?:ich(?:ing|ib|sangiz)|qabul qiling|surt\w+|укол qil)"
+        r"[^.!?]{0,40}\b(?:dori|tabletka|antibiotik|preparat|kapsula)\w*"
+        r"|\b(?:dori|tabletka|antibiotik|preparat|kapsula)\w*"
+        r"[^.!?]{0,40}\b(?:ich(?:ing|ib|sangiz)|qabul qiling)",
+    ),
+    (
+        "ичь",
+        r"\b(?:принимайте|пейте|выпейте|примите)\b[^.!?]{0,40}"
+        r"\b(?:лекарств|таблетк|антибиотик|препарат)"
+        r"|\b(?:лекарств|таблетк|антибиотик|препарат)\w*\s+"
+        r"(?:принимайте|пейте)",
+    ),
+    # writing a prescription
+    ("retsept", r"\bretsept \w*(?:yoz|ber)|\bрецепт \w*(?:выпиш|напиш)"),
+)
+
+_COMPILED_PRESCRIPTION = tuple(
+    (name, re.compile(pattern, re.IGNORECASE)) for name, pattern in _PRESCRIPTION_PATTERNS
+)
+
+# What the patient gets instead. Same shape as the emergency and no-match
+# lines: fixed text, in the script they wrote in.
+_WITHHELD_RESPONSES = {
+    "uz-latn": (
+        "Buni sizga men aytolmayman — dori va davolash haqida faqat shifokor, "
+        "ko'rikdan keyin gapira oladi. Sizni qabulga yozib qo'yaymi?"
+    ),
+    "uz-cyrl": (
+        "Буни сизга мен айтолмайман — дори ва даволаш ҳақида фақат шифокор, "
+        "кўрикдан кейин гапира олади. Сизни қабулга ёзиб қўяйми?"
+    ),
+    "ru": (
+        "Этого я вам сказать не могу — о лекарствах и лечении говорит только "
+        "врач, после осмотра. Записать вас на приём?"
+    ),
+}
+
+
+def review_reply(reply: str, user_message: str) -> str:
+    """The reply, or a refusal in its place if it prescribes something.
+
+    Returns `reply` unchanged in the overwhelming majority of cases. When it
+    does replace one, the original is logged: a clinic needs to see what its
+    assistant tried to say, and a silent swap hides exactly the failure this
+    exists to catch.
+    """
+    for name, pattern in _COMPILED_PRESCRIPTION:
+        match = pattern.search(reply)
+        if match is None:
+            continue
+        logger.error(
+            "guardrail_reply_withheld rule=%s matched=%r reply=%r",
+            name,
+            match.group(0)[:80],
+            reply[:400],
+        )
+        return _WITHHELD_RESPONSES[reply_script(user_message)]
+    return reply

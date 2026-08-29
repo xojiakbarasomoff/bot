@@ -5,6 +5,7 @@ from app.services.guardrail import (
     GuardrailCategory,
     KeywordGuardrailClassifier,
     evaluate_guardrail,
+    review_reply,
 )
 
 classifier = KeywordGuardrailClassifier()
@@ -155,3 +156,56 @@ def test_the_emergency_line_is_written_where_the_patient_can_read_it(
 def test_every_emergency_translation_names_the_ambulance_number() -> None:
     for text in EMERGENCY_RESPONSES.values():
         assert "103" in text
+
+
+# --- what the assistant is allowed to say back -------------------------
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Sizga kuniga 2 mahal ichish kerak.",
+        "Amoksitsillin 500 mg buyuriladi.",
+        "Antibiotik iching, o'tib ketadi.",
+        "Bu dorini qabul qiling.",
+        "Doringizni ichib turing.",
+        "Принимайте таблетки два раза.",
+        "Sizga retsept yozib beraman.",
+    ],
+)
+def test_a_reply_that_prescribes_never_reaches_the_patient(reply: str) -> None:
+    """Rule 3 of the system prompt says none of these may be written. This is
+    the part that does not depend on the model having followed it.
+    """
+    assert review_reply(reply, "salom") != reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # A refusal names the same subjects it is refusing to discuss, so a
+        # denylist of topic words would block the assistant behaving well.
+        "Operatsiya kerakmi degan savolga faqat shifokor javob bera oladi.",
+        "Dori haqida shifokor ko'rikdan keyin gapiradi.",
+        "Antibiotik masalasini shifokor hal qiladi.",
+        "Buyrak toshi bilan urolog shug'ullanadi. Ko'rikda UZI qilinadi.",
+        "Klinika har kuni 09:00 dan 20:00 gacha ishlaydi.",
+        "Ertaga soat 14:30 bo'sh. Sizga qulaymi?",
+        "Dorixona binoning birinchi qavatida.",
+    ],
+)
+def test_an_ordinary_reply_is_passed_through_untouched(reply: str) -> None:
+    assert review_reply(reply, "salom") == reply
+
+
+def test_the_refusal_is_written_in_the_patients_own_script() -> None:
+    """Same rule the emergency and no-match lines follow: the patient is
+    answered in the alphabet they wrote in, not in the clinic's default.
+    """
+    uzbek = review_reply("Antibiotik iching", "buyragim og'riyapti")
+    russian = review_reply("Antibiotik iching", "Здравствуйте, что делать?")
+    cyrillic = review_reply("Antibiotik iching", "буйрагим оғрияпти")
+
+    assert "shifokor" in uzbek
+    assert "врач" in russian
+    assert "шифокор" in cyrillic
