@@ -329,32 +329,99 @@ def evaluate_guardrail(
 # word "operatsiya". What is caught here is instruction: a dose, a schedule,
 # or telling somebody to take something.
 _PRESCRIPTION_PATTERNS: tuple[tuple[str, str], ...] = (
-    # a dose: a number next to a unit
-    ("doza", r"\d+\s*(?:mg|mg\.|ml|мг|мл|gr|г)\b"),
-    # a schedule: "kuniga 2 mahal", "2 раза в день", "3 marta"
+    # A named medicine. Written out in full here rather than folded into the
+    # rules below, because naming one at all is the line: a legitimate refusal
+    # talks about "dori" or "antibiotik" as a class -- "antibiotik kerakmi,
+    # buni urolog hal qiladi" -- and never reaches for a brand. Matched by the
+    # endings drug names are built from, so the list does not have to be kept
+    # current with a pharmacy's shelves.
+    (
+        "dori nomi",
+        r"\b\w{3,}(?:tsillin|itsin|mitsin|floksatsin|floxacin|siklin|azol"
+        r"|prazol|zosin|ozin|sartan|pril|statin|profen|olol|tidin|ceftriakson)\b"
+        r"|\b\w{3,}(?:циллин|ицин|мицин|флоксацин|циклин|азол"
+        r"|празол|зозин|озин|сартан|прил|статин|профен|олол|тидин)\b",
+    ),
+    # A dose: a number next to a unit.
+    ("doza", r"\d+\s*(?:mg|mg\.|ml|мг|мл|gr|г|tabletka|таблетк)\w*\b"),
+    # A schedule, in digits or in words. "kuniga ikki mahal" is the same
+    # instruction as "kuniga 2 mahal" and was walking straight past.
     (
         "jadval",
-        r"kuniga\s*\d+|\d+\s*(?:mahal|marta)\s*(?:ich\w*|qabul)"
-        r"|\d+\s*раз[ау]?\s*в \s*день",
+        r"kuniga\s*(?:\d+|bir|ikki|uch|to\'rt|besh)"
+        r"|(?:\d+|bir|ikki|uch|to\'rt|besh)\s*(?:mahal|marta)"
+        r"\s*(?:ich\w*|qabul|surt\w*)"
+        r"|\d+\s*раз[ау]?\s*в\s*день",
     ),
-    # being told to take something
+    # Being told to take something. The window is wide enough to survive a
+    # clause in the middle: "dorini -- bu muhim -- qabul qiling".
     (
         "ichish",
         r"\b(?:ich(?:ing|ib|sangiz)|qabul qiling|surt\w+|укол qil)"
-        r"[^.!?]{0,40}\b(?:dori|tabletka|antibiotik|preparat|kapsula)\w*"
+        r"[^.!?]{0,80}\b(?:dori|tabletka|antibiotik|preparat|kapsula)\w*"
         r"|\b(?:dori|tabletka|antibiotik|preparat|kapsula)\w*"
-        r"[^.!?]{0,40}\b(?:ich(?:ing|ib|sangiz)|qabul qiling)",
+        r"[^.!?]{0,80}\b(?:ich(?:ing|ib|sangiz)|qabul qiling)",
+    ),
+    # The same, in Uzbek Cyrillic. Half the clinic's patients write in it.
+    (
+        "ичиш",
+        r"\b(?:ичинг|ичиб|қабул қилинг)[^.!?]{0,80}"
+        r"\b(?:дори|таблетка|антибиотик|препарат)\w*"
+        r"|\b(?:дори|таблетка|антибиотик|препарат)\w*[^.!?]{0,80}"
+        r"\b(?:ичинг|ичиб|қабул қилинг)",
     ),
     (
         "ичь",
-        r"\b(?:принимайте|пейте|выпейте|примите)\b[^.!?]{0,40}"
+        r"\b(?:принимайте|пейте|выпейте|примите)\b[^.!?]{0,80}"
         r"\b(?:лекарств|таблетк|антибиотик|препарат)"
         r"|\b(?:лекарств|таблетк|антибиотик|препарат)\w*\s+"
         r"(?:принимайте|пейте)",
     ),
-    # writing a prescription
+    # Prescribing without an imperative: "bunga antibiotik buyuriladi" is a
+    # recommendation wearing the passive voice.
+    (
+        "buyurish",
+        r"\b(?:buyur(?:iladi|aman|amiz)|tavsiya qil\w+|yordam beradi)"
+        r"[^.!?]{0,80}\b(?:dori|antibiotik|preparat|tabletka)\w*"
+        r"|\b(?:dori|antibiotik|preparat|tabletka)\w*[^.!?]{0,80}"
+        r"\b(?:buyur(?:iladi|aman|amiz)|tavsiya qil\w+|yordam beradi)",
+    ),
+    # Telling the patient what they have. Rule 3 forbids diagnosing as
+    # plainly as it forbids prescribing, and a keyword filter can hold the
+    # obvious form of it: "sizda" plus a condition. A condition has to be
+    # named -- "sizda qabul bor" is the assistant doing its job.
+    (
+        "tashxis",
+        # A condition has to be named AND attributed. "Sizda prostatit bor"
+        # is a diagnosis; "Prostatit bilan urolog shug'ullanadi" is the
+        # assistant explaining who to see, and an earlier draft of this rule
+        # blocked the second one in Russian because it matched the condition
+        # on its own.
+        r"\b(?:sizda|sizning|у вас|у Вас|это ваш)\b[^.!?]{0,60}"
+        r"\b(?:prostatit|sistit|uretrit|pielonefrit|nefrit|adenoma|kista"
+        r"|infeksiya|saraton|o\'sma|tosh(?:i|lar)?"
+        r"|простатит|цистит|уретрит|пиелонефрит|нефрит|аденом|киста"
+        r"|инфекц|рак|опухол|камен)\w*"
+        # Certainty about a condition is a diagnosis however it is phrased.
+        r"|(?:100\s*%|\b(?:aniq|albatta|shubhasiz|точно|определённо)\b)[^.!?]{0,30}"
+        r"\b(?:prostatit|sistit|uretrit|infeksiya|saraton|o\'sma|adenoma"
+        r"|простатит|цистит|инфекц|рак|опухол)\w*",
+    ),
+    # Telling the patient they need not come. The most harmful thing this
+    # assistant could say and the one furthest from its purpose: in urology a
+    # painless symptom is exactly the one that must not be waited out.
+    (
+        "kelmang",
+        r"\bjiddiy emas|\bo\'zi (?:o\'tib ketadi|tuzaladi|yo\'qoladi)"
+        r"|\b(?:shifokorga|qabulga|klinikaga)[^.!?]{0,30}"
+        r"\b(?:shart emas|hojat yo\'q|bormasangiz|kelmasangiz)"
+        r"|\b(?:ничего страшного|само пройдёт|само пройдет)"
+        r"|\bне обязательно[^.!?]{0,30}\b(?:приходить|врач)",
+    ),
+    # Writing a prescription.
     ("retsept", r"\bretsept \w*(?:yoz|ber)|\bрецепт \w*(?:выпиш|напиш)"),
 )
+
 
 _COMPILED_PRESCRIPTION = tuple(
     (name, re.compile(pattern, re.IGNORECASE)) for name, pattern in _PRESCRIPTION_PATTERNS
