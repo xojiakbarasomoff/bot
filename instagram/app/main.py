@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Dental Clinic Assistant", lifespan=lifespan)
+app = FastAPI(title="Urology Clinic Assistant", lifespan=lifespan)
 app.include_router(webhook_router)
 app.include_router(telegram_webhook_router)
 app.include_router(auth_router)

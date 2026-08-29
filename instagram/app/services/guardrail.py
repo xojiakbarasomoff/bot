@@ -105,20 +105,24 @@ DEFAULT_EMERGENCY_KEYWORDS: Sequence[str] = (
     #
     # "og'rivotti" was here and had to come out. It is the plain verb "it
     # hurts", which is the single most common thing anybody writes to a
-    # dental clinic -- "ong tomondagi jag tishim og'rivotti" was answered
-    # with "call 103 immediately", in English, to a real patient. A toothache
-    # is why these people write; it is not an ambulance.
+    # clinic -- "ong tomondagi jag tishim og'rivotti" was answered with
+    # "call 103 immediately", in English, to a real patient. Pain is why
+    # these people write; it is not an ambulance.
     #
-    # What is left describes things a dentist cannot handle in a chat:
-    # bleeding that will not stop, losing consciousness, trouble breathing.
+    # The bare "qon kelyapti" and "qon ketvotti" came out for the same
+    # reason once this became a urology clinic: "blood is coming" is how a
+    # patient describes blood in their urine, which is a reason to be seen
+    # this week, not a reason to call 103. What is left says the bleeding
+    # will not stop or is heavy, and that still means an ambulance.
+    #
+    # What is left describes things nobody can handle in a chat: bleeding
+    # that will not stop, losing consciousness, trouble breathing.
     "kuchli og'riq",
     "chidab bo'lmas og'riq",
     "chidab bo'lmaydigan og'riq",
     "qon to'xtamayapti",
     "qon ketishi to'xtamayapti",
     "qattiq qon ketyapti",
-    "qon ketvotti",
-    "qon kelyapti",
     "hushidan ketdi",
     "hushini yo'qotdi",
     "behush bo'lib qoldi",

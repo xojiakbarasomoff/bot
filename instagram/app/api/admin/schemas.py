@@ -120,7 +120,7 @@ class DoctorOut(BaseModel):
 
 class DoctorCreate(BaseModel):
     name: str
-    specialty: str = "Stomatolog"
+    specialty: str = "Urolog"
     phone: str | None = None
     working_hours: str = "09:00 - 18:00"
 
