@@ -161,6 +161,15 @@ values = {
     "A8": [["VAQT", "BEMOR", "TELEFON", "SHIFOKOR",
             "MUTAXASSISLIK", "XIZMAT", "STATUS", "KANAL"]],
     "A9": [[patient_list]],
+    # R is hidden -- it exists only to be the dropdown's source.
+    "R1": [["_sanalar"]],
+    "R2": [[
+        # A week back to a month ahead, plus every day that already has a
+        # booking. The window is there so the calendar can hand this cell an
+        # empty day without Sheets flagging it as invalid data.
+        "=IFERROR(SORT(UNIQUE({TODAY()+SEQUENCE(38,1,-7);"
+        'FILTER(Qabullar!E2:E,Qabullar!E2:E<>"")})),"")'
+    ]],
 }
 r = CLIENT.post(f"{BASE}/values:batchUpdate", json={
     "valueInputOption": "USER_ENTERED",
@@ -207,10 +216,19 @@ requests = [
         "borders": {side: {"style": "SOLID", "color": rgb(ACCENT_LINE)}
                     for side in ("top", "bottom", "left", "right")},
     }),
+    # A list of the days that have patients, not a free date field. strict is
+    # off on purpose: the calendar can still hand it a day nobody has booked
+    # yet, and a strict rule would flag that as an error.
     {"setDataValidation": {"range": span(5, 6, 0, 2), "rule": {
-        "condition": {"type": "DATE_IS_VALID"},
-        "inputMessage": "Sanani tanlang yoki kalendardan bosing",
-        "strict": True, "showCustomUi": True}}},
+        "condition": {"type": "ONE_OF_RANGE",
+                      "values": [{"userEnteredValue": f"={TAB}!$R$2:$R$200"}]},
+        "inputMessage": "Sanani ro'yxatdan tanlang yoki kalendardan bosing",
+        "strict": False, "showCustomUi": True}}},
+
+    # the dropdown shows the source cells as they are formatted
+    fmt(span(1, 200, 17, 18),
+        {"numberFormat": {"type": "DATE", "pattern": "dd.MM.yyyy"},
+         "textFormat": text(10, MUTED)}),
     fmt(span(5, 6, 2, 3), {"textFormat": text(9, FAINT), "padding": {"left": 8}}),
 
     # the two counters
@@ -274,6 +292,9 @@ for c1, c2, px in [(0, 1, 100), (1, 2, 165), (2, 3, 115), (3, 4, 125), (4, 5, 10
 requests.append({"updateDimensionProperties": {
     "range": {"sheetId": SHEET_ID, "dimension": "COLUMNS", "startIndex": 9, "endIndex": 16},
     "properties": {"pixelSize": 44}, "fields": "pixelSize"}})
+requests.append({"updateDimensionProperties": {
+    "range": {"sheetId": SHEET_ID, "dimension": "COLUMNS", "startIndex": 17, "endIndex": 18},
+    "properties": {"hiddenByUser": True}, "fields": "hiddenByUser"}})
 
 stage("dizayn", requests)
 

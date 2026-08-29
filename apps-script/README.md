@@ -15,11 +15,12 @@ bosasiz, pastda o'sha kundagi bemorlar chiqadi.
 
 | Element | Joyi | Nima qiladi |
 |---|---|---|
-| Sana katakchasi | `B3` | Hamma narsa shunga bog'langan |
-| Hisoblagichlar | `E3`, `G3` | O'sha kundagi jami / tasdiqlangan |
-| Oy nomi | `J3` | O'zbekcha, `B3` dagi oyga qarab |
-| Kalendar to'ri | `J6:P11` | Bosilsa `B3` ga sana yoziladi |
-| Bemorlar ro'yxati | `A6` | `FILTER` + `SORT`, vaqt bo'yicha |
+| Sana katakchasi | `A6` (`TanlanganSana`) | Ochiladigan ro'yxat — hamma narsa shunga bog'langan |
+| Hisoblagichlar | `D6`, `F6` | O'sha kundagi jami / tasdiqlangan |
+| Bemorlar ro'yxati | `A9` | `FILTER` + `SORT`, vaqt bo'yicha |
+| Oy nomi | `J7` | O'zbekcha, tanlangan oyga qarab |
+| Kalendar to'ri | `J9:P14` | Bosilsa sana katakchasiga yoziladi |
+| Ro'yxat manbasi | `R` (yashirin) | Bir hafta oldin — bir oy keyin + band kunlar |
 
 Ranglar: **yashil** — tanlangan kun, **qalin ko'k** — o'sha kunda qabul bor,
 kulrang — qo'shni oyning kunlari. Ro'yxatda yashil qator — tasdiqlangan,
