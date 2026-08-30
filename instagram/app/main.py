@@ -80,7 +80,13 @@ async def _security_headers(request: Request, call_next: Any) -> Response:
         response.headers.setdefault(header, value)
     # Only over HTTPS: sent on a plain-HTTP response it is ignored, and in
     # local development it would pin localhost to HTTPS for months.
-    if request.url.scheme == "https":
+    #
+    # X-Forwarded-Proto before request.url.scheme, because behind a platform
+    # router the app is spoken to over plain HTTP and sees "http" even though
+    # the patient's browser is on TLS -- which is how the first version of
+    # this sent no HSTS at all in the one place it mattered.
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    if (forwarded or request.url.scheme) == "https":
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
         )
