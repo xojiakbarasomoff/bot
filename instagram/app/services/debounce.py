@@ -35,6 +35,11 @@ def _load_script(filename: str) -> str:
 # See app/services/lua/*.lua for the scripts themselves and their comments.
 _POP_IF_CURRENT_GENERATION = _load_script("pop_if_current_generation.lua")
 _CLEAR_IF_LENGTH_UNCHANGED = _load_script("clear_if_length_unchanged.lua")
+_RESTORE_BATCH = _load_script("restore_batch.lua")
+
+# How long a restored batch survives. Comfortably longer than the retry
+# schedule in fire_debounce_window, so the last attempt still finds it.
+_RESTORED_BATCH_TTL_SECONDS = 3600
 
 
 def _key_prefix(tenant_id: uuid.UUID, channel_id: uuid.UUID, sender_external_id: str) -> str:
@@ -94,6 +99,43 @@ async def pop_batch_if_current_generation(
     if not result:
         return None
     return _decode(result)
+
+
+async def restore_batch(
+    pool: ArqRedis,
+    tenant_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    sender_external_id: str,
+    generation: int,
+    messages: Sequence[str],
+) -> None:
+    """Put a claimed batch back after the work that claimed it failed.
+
+    pop_batch_if_current_generation is a destructive claim: once it returns,
+    Redis no longer holds the patient's words. Answering them can still fail
+    afterwards -- a rate-limited model is the ordinary case, not an exotic one
+    -- and without this the message is gone, unanswered, with nothing written
+    down anywhere to say so.
+
+    Best effort by design: this runs while another failure is already being
+    handled, and a raise from here would replace a recoverable error with an
+    unrecoverable one.
+    """
+    if not messages:
+        return
+    try:
+        script = pool.register_script(_RESTORE_BATCH)
+        await script(
+            keys=[
+                _generation_key(tenant_id, channel_id, sender_external_id),
+                _messages_key(tenant_id, channel_id, sender_external_id),
+            ],
+            args=[str(generation), str(_RESTORED_BATCH_TTL_SECONDS), *messages],
+        )
+    except Exception:
+        logger.exception(
+            "debounce_restore_failed messages=%d sender=%s", len(messages), sender_external_id
+        )
 
 
 async def _try_clear_buffer(

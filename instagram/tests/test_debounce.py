@@ -3,6 +3,7 @@ import time
 import uuid
 
 import pytest
+from arq import Retry
 from arq.connections import ArqRedis
 from arq.jobs import Job
 
@@ -14,6 +15,7 @@ from app.services.debounce import (
     handle_inbound_message,
     join_messages,
     pop_batch_if_current_generation,
+    restore_batch,
 )
 from app.workers.tasks import fire_debounce_window, process_inbound_message
 
@@ -375,3 +377,113 @@ async def test_handle_inbound_message_logs_debug_when_clear_loses_the_race(
         )
 
     assert "debounce_emergency_buffer_clear_skipped_due_to_race" in caplog.text
+
+
+# --- a failed batch is put back, not lost ------------------------------
+
+
+async def test_a_restored_batch_can_be_claimed_again(redis_pool: ArqRedis) -> None:
+    """The claim is destructive: after popping, Redis no longer holds the
+    patient's words. If answering them fails, the only copy is in the
+    worker's memory, and this is what puts it back.
+    """
+    tenant_id, channel_id = uuid.uuid4(), uuid.uuid4()
+    messages_key, generation_key = _keys(tenant_id, channel_id)
+
+    await redis_pool.rpush(messages_key, "salom", "buyragim og'riyapti")
+    await redis_pool.set(generation_key, "1")
+
+    claimed = await pop_batch_if_current_generation(redis_pool, tenant_id, channel_id, SENDER, 1)
+    assert claimed == ["salom", "buyragim og'riyapti"]
+    assert await redis_pool.exists(messages_key) == 0
+
+    await restore_batch(redis_pool, tenant_id, channel_id, SENDER, 1, claimed)
+
+    # The retry runs with the same generation, so it must claim the same batch.
+    again = await pop_batch_if_current_generation(redis_pool, tenant_id, channel_id, SENDER, 1)
+    assert again == claimed
+
+
+async def test_a_restored_batch_goes_in_front_of_newer_messages(
+    redis_pool: ArqRedis,
+) -> None:
+    """A message that arrived while the failed job was running started a new
+    generation with its own job already scheduled. The restored words were
+    said first, so they belong at the head -- and the counter must be left
+    alone, or two jobs would both think they own the buffer.
+    """
+    tenant_id, channel_id = uuid.uuid4(), uuid.uuid4()
+    messages_key, generation_key = _keys(tenant_id, channel_id)
+
+    await redis_pool.rpush(messages_key, "yana bir savol")
+    await redis_pool.set(generation_key, "7")
+
+    await restore_batch(redis_pool, tenant_id, channel_id, SENDER, 3, ["birinchi", "ikkinchi"])
+
+    assert await redis_pool.get(generation_key) == b"7"
+    assert await redis_pool.lrange(messages_key, 0, -1) == [
+        b"birinchi",
+        b"ikkinchi",
+        b"yana bir savol",
+    ]
+    # The failed job's own retry expects generation 3 and must now no-op,
+    # which is what stops the same words being answered twice.
+    assert (
+        await pop_batch_if_current_generation(redis_pool, tenant_id, channel_id, SENDER, 3) is None
+    )
+
+
+async def test_a_failing_job_leaves_the_patients_words_in_redis(
+    redis_pool: ArqRedis,
+) -> None:
+    """The whole point. Before this, a rate-limited model meant the patient
+    wrote, nobody answered, and nothing recorded that it happened.
+    """
+    tenant_id, channel_id = uuid.uuid4(), uuid.uuid4()
+    messages_key, generation_key = _keys(tenant_id, channel_id)
+
+    await redis_pool.rpush(messages_key, "qabulga yozilmoqchiman")
+    await redis_pool.set(generation_key, "1")
+
+    class Failing:
+        """A session factory whose context manager raises on entry, the way a
+        rate-limited model surfaces once the job is already holding the batch."""
+
+        def __call__(self) -> "Failing":
+            return self
+
+        async def __aenter__(self) -> None:
+            raise RuntimeError("429 quota exceeded")
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    # An early attempt asks arq to come back later rather than giving up.
+    with pytest.raises(Retry):
+        await fire_debounce_window(
+            {"redis": redis_pool, "job_try": 1},
+            str(tenant_id),
+            str(channel_id),
+            str(uuid.uuid4()),
+            SENDER,
+            1,
+            None,
+            session_factory=Failing(),
+        )
+
+    assert await redis_pool.lrange(messages_key, 0, -1) == [b"qabulga yozilmoqchiman"]
+    assert await redis_pool.get(generation_key) == b"1"
+
+    # The last attempt lets the real error out instead of deferring forever,
+    # so the failure is recorded rather than looping quietly.
+    with pytest.raises(RuntimeError):
+        await fire_debounce_window(
+            {"redis": redis_pool, "job_try": 5},
+            str(tenant_id),
+            str(channel_id),
+            str(uuid.uuid4()),
+            SENDER,
+            1,
+            None,
+            session_factory=Failing(),
+        )

@@ -14,7 +14,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import Any
 
-from arq import cron
+from arq import Retry, cron
 from arq.connections import RedisSettings
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,7 +43,11 @@ from app.services.conversation import (
     record_outbound_message,
 )
 from app.services.conversation_signals import find_phone_number
-from app.services.debounce import join_messages, pop_batch_if_current_generation
+from app.services.debounce import (
+    join_messages,
+    pop_batch_if_current_generation,
+    restore_batch,
+)
 from app.services.delivery import send_reply
 from app.services.reminders import send_due_reminders
 from app.services.sheets import (
@@ -55,6 +59,17 @@ from app.services.sheets import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How long to wait before each retry of a failed batch, in order. The first
+# few are short because most failures are a blip; the last is long enough to
+# ride out a provider having a bad few minutes. Shorter in total than the TTL
+# restore_batch sets, or the last attempt would find nothing to answer.
+_RETRY_BACKOFF_SECONDS = (30, 120, 300, 600)
+
+# Must match arq's max_tries in WorkerSettings: after this many attempts the
+# job is abandoned, and the log line at that point is the only notice anyone
+# gets that a patient went unanswered.
+_MAX_ATTEMPTS = 5
 
 
 async def process_inbound_message(
@@ -289,19 +304,55 @@ async def fire_debounce_window(
     if not messages:
         return
 
-    await process_inbound_message(
-        ctx,
-        tenant_id,
-        channel_id,
-        conversation_id,
-        sender_external_id,
-        join_messages(messages),
-        reply_context,
-        session_factory=session_factory,
-        embedding_provider=embedding_provider,
-        llm_provider=llm_provider,
-        adapter=adapter,
-    )
+    try:
+        await process_inbound_message(
+            ctx,
+            tenant_id,
+            channel_id,
+            conversation_id,
+            sender_external_id,
+            join_messages(messages),
+            reply_context,
+            session_factory=session_factory,
+            embedding_provider=embedding_provider,
+            llm_provider=llm_provider,
+            adapter=adapter,
+        )
+    except Exception as exc:
+        # The claim above emptied Redis, so these words exist nowhere else.
+        # Put them back before letting the failure out, or a rate-limited
+        # model means a patient wrote and nobody ever answered -- and nothing
+        # anywhere records that it happened.
+        await restore_batch(
+            pool,
+            uuid.UUID(tenant_id),
+            uuid.UUID(channel_id),
+            sender_external_id,
+            generation,
+            messages,
+        )
+        attempt = int(ctx.get("job_try") or 1)
+        defer = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS)) - 1]
+        if attempt >= _MAX_ATTEMPTS:
+            # The last word on this batch. It stays in Redis until its TTL,
+            # but nothing will come back for it, so this line is the only
+            # place the clinic can learn the patient was left unanswered.
+            logger.error(
+                "debounce_batch_abandoned attempts=%d messages=%d sender=%s error=%s",
+                attempt,
+                len(messages),
+                sender_external_id,
+                exc,
+            )
+            raise
+        logger.warning(
+            "debounce_batch_deferred attempt=%d defer=%ds messages=%d error=%s",
+            attempt,
+            defer,
+            len(messages),
+            exc,
+        )
+        raise Retry(defer=defer) from exc
 
 
 async def send_appointment_reminders(
@@ -335,6 +386,9 @@ configure_logging()
 
 class WorkerSettings:
     functions = [process_inbound_message, fire_debounce_window]
+    # Named here as well as in _MAX_ATTEMPTS so the retry ladder in
+    # fire_debounce_window and arq's own limit cannot drift apart.
+    max_tries = _MAX_ATTEMPTS
     # Every five minutes. The reminder windows are hours wide and the job
     # catches up on anything it missed, so this is about how promptly a
     # reminder lands inside its window rather than about not losing one.
