@@ -71,20 +71,16 @@ REMINDER_WINDOWS: tuple[ReminderWindow, ...] = (
             "ko'rikka yozilgansiz. Sizni kutamiz!"
         ),
         template_unassigned=(
-            "Eslatma: ertaga, {date} kuni soat {time} da qabulga yozilgansiz. "
-            "Sizni kutamiz!"
+            "Eslatma: ertaga, {date} kuni soat {time} da qabulga yozilgansiz. Sizni kutamiz!"
         ),
     ),
     ReminderWindow(
         lead_time=timedelta(hours=2),
         flag="reminder_2h_sent",
         template=(
-            "Eslatma: bugun soat {time} da {doctor} qabulida ko'rikka "
-            "kutilmoqdasiz. Sizni kutamiz!"
+            "Eslatma: bugun soat {time} da {doctor} qabulida ko'rikka kutilmoqdasiz. Sizni kutamiz!"
         ),
-        template_unassigned=(
-            "Eslatma: bugun soat {time} da qabulga yozilgansiz. Sizni kutamiz!"
-        ),
+        template_unassigned=("Eslatma: bugun soat {time} da qabulga yozilgansiz. Sizni kutamiz!"),
     ),
 )
 

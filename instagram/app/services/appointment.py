@@ -1,11 +1,13 @@
 import uuid
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Collection, Iterator, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 
 from app.models.appointment import Appointment, AppointmentStatus
+from app.models.doctor import Doctor
 from app.repositories.appointment import AppointmentRepository
 
 # TODO(IGB-?): move onto Tenant.settings once the admin/dashboard panel
@@ -116,7 +118,52 @@ def _first_slot_on_or_after(local_dt: datetime) -> datetime:
     return next(iter(day_slots(local_dt.date() + timedelta(days=1))))
 
 
-async def check_availability(repo: AppointmentRepository, scheduled_at: datetime) -> bool:
+def slot_capacity(doctor_count: int) -> int:
+    """How many bookings one time slot can hold.
+
+    One per active doctor -- and one when the clinic has listed none at all.
+    Without that floor, a practice that has not filled in its staff would be
+    able to book nobody, which is a worse failure than the one it replaces.
+    """
+    return max(doctor_count, 1)
+
+
+def first_free_doctor(
+    doctors: Sequence[Doctor], taken: Collection[uuid.UUID | None]
+) -> Doctor | None:
+    """The first doctor with nothing at this slot, or None if all are busy.
+
+    In listed order rather than by load: a clinic that lists its senior first
+    means it, and evening out a rota is a scheduling decision the front desk
+    makes, not one to bury in a booking helper.
+    """
+    busy = set(taken)
+    return next((doctor for doctor in doctors if doctor.id not in busy), None)
+
+
+async def assign_doctor(
+    repo: AppointmentRepository,
+    doctors: Sequence[Doctor],
+    scheduled_at: datetime,
+) -> tuple[uuid.UUID | None, str]:
+    """Which doctor takes this slot, and the name to record on the booking.
+
+    Returns (None, UNASSIGNED_DOCTOR_NAME) when the clinic has listed no
+    doctors -- the state every booking has been in so far, and the reason
+    patients were reminded of an appointment with "Tayinlanmagan".
+    """
+    if not doctors:
+        return None, UNASSIGNED_DOCTOR_NAME
+    taken = [appt.doctor_id for appt in await repo.list_active_at(scheduled_at)]
+    chosen = first_free_doctor(doctors, taken)
+    if chosen is None:
+        raise SlotAlreadyBookedError(scheduled_at)
+    return chosen.id, chosen.name
+
+
+async def check_availability(
+    repo: AppointmentRepository, scheduled_at: datetime, *, capacity: int = 1
+) -> bool:
     """Whether this exact slot could be booked right now.
 
     UX only — a True here is not a hold on the slot, so create_appointment()
@@ -126,7 +173,7 @@ async def check_availability(repo: AppointmentRepository, scheduled_at: datetime
     """
     if not is_within_working_hours(scheduled_at):
         return False
-    return await repo.get_active_at(scheduled_at) is None
+    return len(await repo.list_active_at(scheduled_at)) < capacity
 
 
 async def find_next_free_slot(
@@ -134,6 +181,7 @@ async def find_next_free_slot(
     from_datetime: datetime,
     *,
     horizon_days: int = DEFAULT_SEARCH_HORIZON_DAYS,
+    capacity: int = 1,
 ) -> datetime:
     """The first free, working-hours, grid-aligned slot at or after
     from_datetime, searching up to horizon_days ahead.
@@ -149,12 +197,14 @@ async def find_next_free_slot(
     # the horizon could be missed, making an actually-taken slot look free.
     window_end_local = datetime.combine(last_day, WORK_END, tzinfo=CLINIC_TIMEZONE)
 
-    busy = {
+    # Counted, not collected into a set: a slot is full only once every
+    # doctor in it is taken.
+    booked = Counter(
         appt.scheduled_at
         for appt in await repo.list_active_between(
             local_start.astimezone(UTC), window_end_local.astimezone(UTC)
         )
-    }
+    )
 
     for day_offset in range(horizon_days + 1):
         day = local_start.date() + timedelta(days=day_offset)
@@ -162,7 +212,7 @@ async def find_next_free_slot(
             if slot < local_start:
                 continue
             candidate_utc = slot.astimezone(UTC)
-            if candidate_utc not in busy:
+            if booked[candidate_utc] < capacity:
                 return candidate_utc
 
     raise NoAvailabilityError(from_datetime, horizon_days)

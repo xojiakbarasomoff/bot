@@ -29,6 +29,20 @@ class AppointmentRepository(TenantScopedRepository[Appointment]):
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_active_at(self, scheduled_at: datetime) -> Sequence[Appointment]:
+        """Every active booking at this exact instant.
+
+        get_active_at answered "is the clinic busy"; this answers "which
+        doctors are", which is what a slot holding one booking per clinician
+        needs to know.
+        """
+        stmt = select(Appointment).where(
+            Appointment.tenant_id == get_current_tenant(),
+            Appointment.scheduled_at == scheduled_at,
+            Appointment.status.in_(ACTIVE_STATUSES),
+        )
+        return (await self.session.execute(stmt)).scalars().all()
+
     async def list_active_between(self, start: datetime, end: datetime) -> Sequence[Appointment]:
         """Every slot-holding booking in [start, end) for the current tenant.
 

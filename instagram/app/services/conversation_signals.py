@@ -165,8 +165,7 @@ def render(signals: ConversationSignals) -> str:
         lines.append("You have already asked them for their number once.")
     else:
         lines.append(
-            f"You have already asked them for their number "
-            f"{signals.times_asked_for_number} times."
+            f"You have already asked them for their number {signals.times_asked_for_number} times."
         )
     body = "\n".join(f"- {line}" for line in lines)
     return f"\n\nWHERE THIS CONVERSATION STANDS\n{body}"

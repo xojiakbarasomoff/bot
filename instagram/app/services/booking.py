@@ -40,6 +40,7 @@ room.
 import logging
 import re
 import uuid
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
@@ -47,9 +48,11 @@ from sqlalchemy import select
 
 from app.models.appointment import Appointment, AppointmentStatus
 from app.repositories.appointment import AppointmentRepository
+from app.repositories.doctor import DoctorRepository
 from app.services.appointment import (
     CLINIC_TIMEZONE,
     SlotAlreadyBookedError,
+    assign_doctor,
     create_appointment,
     day_slots,
 )
@@ -115,12 +118,16 @@ MALFORMED_MARKER = re.compile(r"\[\[\s*BOOK[^\]]*\]?\]?")
 # cannot mirror the patient's language. Rare enough to be worth that, and
 # far better than a confirmation that is not true.
 SLOT_LOST_NOTICE = (
-    "\n\nKechirasiz, bu vaqtni hozirgina band qilishdi. " "Qaysi vaqt sizga qulay bo'lardi?"
+    "\n\nKechirasiz, bu vaqtni hozirgina band qilishdi. Qaysi vaqt sizga qulay bo'lardi?"
 )
 
 
 async def free_slots(
-    repo: AppointmentRepository, now: datetime, *, horizon_days: int = HORIZON_DAYS
+    repo: AppointmentRepository,
+    now: datetime,
+    *,
+    horizon_days: int = HORIZON_DAYS,
+    capacity: int = 1,
 ) -> list[datetime]:
     """Every free, working-hours slot from `now` to the end of the horizon.
 
@@ -132,12 +139,14 @@ async def free_slots(
     last_day = local_now.date() + timedelta(days=horizon_days)
     window_end = datetime.combine(last_day, datetime.max.time(), tzinfo=CLINIC_TIMEZONE)
 
-    busy = {
+    # Counted rather than collected: with several doctors a slot is only
+    # full once each of them is taken.
+    booked = Counter(
         appointment.scheduled_at
         for appointment in await repo.list_active_between(
             local_now.astimezone(UTC), window_end.astimezone(UTC)
         )
-    }
+    )
 
     slots: list[datetime] = []
     for day_offset in range(horizon_days + 1):
@@ -148,7 +157,7 @@ async def free_slots(
             # already passed.
             if slot <= local_now:
                 continue
-            if slot.astimezone(UTC) in busy:
+            if booked[slot.astimezone(UTC)] >= capacity:
                 continue
             slots.append(slot)
             if len(slots) >= MAX_SLOTS:
@@ -328,11 +337,18 @@ async def settle(
     if existing is not None:
         return text, await _move(session_repo, existing, slot, marked_name)
 
+    # Chosen before the insert so the row carries a real name: every booking
+    # so far has been recorded against "Tayinlanmagan", which is also what
+    # patients were being reminded of.
+    doctors = await DoctorRepository(session_repo.session).list_active()
     try:
+        doctor_id, doctor_name = await assign_doctor(session_repo, doctors, slot.astimezone(UTC))
         appointment = await create_appointment(
             session_repo,
             scheduled_at=slot.astimezone(UTC),
             source=source,
+            doctor_id=doctor_id,
+            doctor_name=doctor_name,
             user_id=user_id,
             conversation_id=conversation_id,
             patient_name=marked_name or patient_name,

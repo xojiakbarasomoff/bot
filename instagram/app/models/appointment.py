@@ -40,6 +40,11 @@ ACTIVE_STATUSES: frozenset[str] = frozenset(
 
 _ACTIVE_STATUS_SQL = ", ".join(f"'{status}'" for status in sorted(ACTIVE_STATUSES))
 
+# Stands in for doctor_id in the unique index below when no doctor has
+# been assigned. Any fixed uuid would do; the all-zero one is recognisable
+# in an index definition as a placeholder rather than a real row.
+_NO_DOCTOR_SENTINEL = "00000000-0000-0000-0000-000000000000"
+
 
 class Appointment(Base):
     __tablename__ = "appointments"
@@ -55,9 +60,21 @@ class Appointment(Base):
         #
         # The Telegram side had no equivalent, which is why two patients
         # could be booked into the same time there.
+        # Scoped by doctor, so a slot holds one booking per clinician rather
+        # than one for the whole clinic. Without doctor_id in here, a clinic
+        # with three urologists could still only see one patient at 11:00 --
+        # two thirds of its capacity was unreachable.
+        #
+        # COALESCE rather than a plain column, because NULLs are distinct in
+        # a unique index: two bookings with no doctor assigned would each be
+        # allowed at the same time, which is the double-booking this index
+        # exists to prevent. Folding NULL onto a fixed uuid keeps "nobody
+        # assigned" behaving exactly as it did before -- one such booking per
+        # slot -- while each named doctor gets their own.
         Index(
-            "uq_appointments_tenant_id_scheduled_at",
+            "uq_appointments_tenant_doctor_scheduled_at",
             "tenant_id",
+            text(f"COALESCE(doctor_id, '{_NO_DOCTOR_SENTINEL}'::uuid)"),
             "scheduled_at",
             unique=True,
             postgresql_where=text(f"status IN ({_ACTIVE_STATUS_SQL})"),

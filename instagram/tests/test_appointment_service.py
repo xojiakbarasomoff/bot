@@ -2,7 +2,8 @@ import asyncio
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
-from uuid import UUID
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete
@@ -32,6 +33,8 @@ from app.services.appointment import (
     check_availability,
     create_appointment,
     find_next_free_slot,
+    first_free_doctor,
+    slot_capacity,
 )
 from tests.conftest import Seed
 
@@ -296,3 +299,29 @@ async def test_concurrent_bookings_only_one_wins() -> None:
                 await cleanup.execute(delete(Tenant).where(Tenant.id == tenant_id))
                 await cleanup.commit()
         await engine.dispose()
+
+
+# --- a slot holds one booking per doctor, not one per clinic -----------
+
+
+def test_a_clinic_with_no_doctors_listed_can_still_book() -> None:
+    """Capacity follows the doctor list, and the floor is what keeps a clinic
+    that has not filled its staff in from being able to book nobody at all.
+    Every booking made so far is in exactly that state.
+    """
+    assert slot_capacity(0) == 1
+    assert slot_capacity(1) == 1
+    assert slot_capacity(3) == 3
+
+
+def test_the_first_doctor_with_nothing_at_that_time_takes_it() -> None:
+    """In listed order rather than by load: a clinic that lists its senior
+    first means it, and evening out a rota is the front desk's decision.
+    """
+    first = SimpleNamespace(id=uuid4(), name="Dr. A")
+    second = SimpleNamespace(id=uuid4(), name="Dr. B")
+
+    assert first_free_doctor([first, second], []) is first
+    assert first_free_doctor([first, second], [first.id]) is second
+    assert first_free_doctor([first, second], [first.id, second.id]) is None
+    assert first_free_doctor([], []) is None

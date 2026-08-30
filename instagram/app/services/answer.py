@@ -8,7 +8,9 @@ from app.rag.embeddings import EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider, get_llm_provider
 from app.rag.retrieval import retrieve_relevant_faqs
 from app.repositories.appointment import AppointmentRepository
+from app.repositories.doctor import DoctorRepository
 from app.repositories.knowledge_base import KnowledgeBaseMatch
+from app.services.appointment import slot_capacity
 from app.services.booking import free_slots
 from app.services.booking import render as render_book
 from app.services.conversation_signals import ConversationSignals, read_signals
@@ -526,7 +528,14 @@ async def generate_answer(
     # Read before the model is asked anything: it offers times from this
     # list rather than working out what is free, so it cannot offer a slot
     # that is taken or a time that has already passed.
-    book = await free_slots(AppointmentRepository(session), datetime.now(UTC))
+    # A slot holds one booking per doctor, so how many times are on offer
+    # depends on how many the clinic has listed.
+    doctors = await DoctorRepository(session).list_active()
+    book = await free_slots(
+        AppointmentRepository(session),
+        datetime.now(UTC),
+        capacity=slot_capacity(len(doctors)),
+    )
 
     system_prompt = _build_system_prompt(
         matches,
