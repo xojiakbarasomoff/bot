@@ -1,9 +1,10 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 # Imported for the side effect of registering the built-in channel adapters
@@ -38,7 +39,54 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-app = FastAPI(title="Urology Clinic Assistant", lifespan=lifespan)
+_settings = get_settings()
+
+app = FastAPI(
+    title="Urology Clinic Assistant",
+    lifespan=lifespan,
+    # None removes the route entirely rather than hiding it, so there is
+    # nothing to find at the usual address.
+    docs_url="/docs" if _settings.api_docs_enabled else None,
+    redoc_url="/redoc" if _settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if _settings.api_docs_enabled else None,
+)
+
+
+# Sent on every response, including the dashboard's own HTML and the error
+# pages, which is why it is middleware rather than a per-route dependency.
+_SECURITY_HEADERS = {
+    # The dashboard shows patient names and phone numbers. Without this it
+    # can be loaded invisibly inside another site and clicked through.
+    "X-Frame-Options": "DENY",
+    # Stops a browser deciding for itself that a JSON response is really
+    # HTML and running it.
+    "X-Content-Type-Options": "nosniff",
+    # A referrer carrying a conversation id has no business on another site.
+    "Referrer-Policy": "same-origin",
+    # The dashboard loads nothing from anywhere else. Saying so means an
+    # injected <script src> has nowhere to load from.
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ),
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next: Any) -> Response:
+    response: Response = await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    # Only over HTTPS: sent on a plain-HTTP response it is ignored, and in
+    # local development it would pin localhost to HTTPS for months.
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+
 app.include_router(webhook_router)
 app.include_router(telegram_webhook_router)
 app.include_router(auth_router)

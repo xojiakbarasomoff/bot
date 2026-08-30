@@ -57,6 +57,7 @@ from app.services.sheets import (
     mirror_lead,
     summarise_problem,
 )
+from app.services.token_refresh import refresh_instagram_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -379,6 +380,28 @@ async def send_appointment_reminders(
         )
 
 
+async def refresh_channel_tokens(
+    ctx: dict[str, Any],
+    *,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] = db_session,
+) -> None:
+    """Cron job: renew Instagram tokens before they run out.
+
+    Daily, though a token lasts sixty days. The margin is the point: a job
+    that runs far more often than it needs to can miss most of its runs and
+    still never let a clinic's Instagram go quiet.
+    """
+    async with session_factory() as session:
+        run = await refresh_instagram_tokens(session)
+    if run.touched:
+        logger.info(
+            "instagram_token_refresh_run refreshed=%d skipped=%d failed=%d",
+            run.refreshed,
+            run.skipped,
+            run.failed,
+        )
+
+
 # The worker is a separate process from the web app, so it needs its own
 # handler installed -- app.main's call never runs here.
 configure_logging()
@@ -392,5 +415,10 @@ class WorkerSettings:
     # Every five minutes. The reminder windows are hours wide and the job
     # catches up on anything it missed, so this is about how promptly a
     # reminder lands inside its window rather than about not losing one.
-    cron_jobs = [cron(send_appointment_reminders, minute=set(range(0, 60, 5)))]
+    cron_jobs = [
+        cron(send_appointment_reminders, minute=set(range(0, 60, 5))),
+        # 03:20 rather than on the hour: nothing else the clinic depends
+        # on runs then, and Meta is quietest.
+        cron(refresh_channel_tokens, hour={3}, minute={20}),
+    ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

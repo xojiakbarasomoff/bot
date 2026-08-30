@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # by someone explicitly setting the variable.
     webhook_signature_enforced: bool = Field(default=True, alias="WEBHOOK_SIGNATURE_ENFORCED")
 
+    # Whether /docs, /redoc and /openapi.json are served. They need no
+    # authentication and describe every route and payload the API has, which
+    # is a map for anyone looking for a way in. Off by default: a deployment
+    # that wants them is developing against it and can say so.
+    api_docs_enabled: bool = Field(default=False, alias="API_DOCS_ENABLED")
+
     # With no FAQ match, whether the LLM may answer from its own knowledge
     # instead of returning app.services.answer.NO_MATCH_RESPONSE. Defaults to
     # false: a clinic assistant that improvises will state opening hours and
