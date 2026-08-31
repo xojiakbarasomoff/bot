@@ -374,6 +374,60 @@ def no_match_response(user_message: str) -> str:
     return NO_MATCH_RESPONSES[reply_script(user_message)]
 
 
+# Telegram's own buttons, not something a patient typed. "/start" is what the
+# client sends when somebody opens the chat and presses Start, and it is the
+# very first thing the clinic ever receives from most patients.
+_CLIENT_COMMANDS = frozenset({"/start", "/help"})
+
+# Answered from here rather than by the model, for three reasons.
+#
+# It is not a question, so there is nothing to answer: asked to reply to
+# "/start", the model produces a greeting, which is the right words by
+# accident rather than because it understood anything.
+#
+# It has no language in it. Script detection sees no Cyrillic and falls to
+# Uzbek Latin, but the model is free to answer in either alphabet -- and did,
+# greeting patients in Cyrillic and then, a moment later, again in Latin when
+# their real "Salom" arrived. Two hellos in two alphabets is the clinic's
+# first impression.
+#
+# And it costs a model call, at the one moment in a conversation where the
+# reply is entirely predictable. On a deployment with a daily allowance, that
+# call is better spent on the patient's actual question.
+START_RESPONSES = {
+    "uz-latn": (
+        "Assalom alaykum! Sizni nima bezovta qilyapti — yoki shifokor qabuliga yozilmoqchimisiz?"
+    ),
+    "uz-cyrl": (
+        "Ассалом алайкум! Сизни нима безовта қиляпти — ёки шифокор қабулига ёзилмоқчимисиз?"
+    ),
+    "ru": ("Здравствуйте! Что вас беспокоит — или хотите записаться на приём к врачу?"),
+}
+
+
+def is_client_command(user_message: str) -> bool:
+    """Whether this "message" is a button the chat client sent on the
+    patient's behalf.
+
+    In groups Telegram addresses commands to a particular bot ("/start@name"),
+    and a client may pad them, so the text is trimmed to the bare command
+    before it is compared. Anything with more than one word is left alone --
+    a patient who writes "/start bugun qabulga yozilsam" has said something,
+    and swallowing it would lose it.
+    """
+    stripped = user_message.strip()
+    if " " in stripped or "\n" in stripped:
+        return False
+    return stripped.split("@", 1)[0].lower() in _CLIENT_COMMANDS
+
+
+def start_response(user_message: str) -> str:
+    """The opening line, in the script the patient wrote in -- which for a
+    bare command is the clinic's own.
+    """
+    return START_RESPONSES[reply_script(user_message)]
+
+
 def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
     if not matches:
         return "(No matching FAQ entries were found for this question.)"
@@ -563,6 +617,11 @@ async def generate_answer(
     cannot repeat them.
     """
     resolved_settings = settings or get_settings()
+
+    # Before the guardrail, because a chat client's button is not a sentence
+    # for it to judge and cannot be an emergency.
+    if is_client_command(user_message):
+        return start_response(user_message)
 
     guardrail = evaluate_guardrail(user_message, guardrail_classifier)
     if guardrail.fixed_response is not None:

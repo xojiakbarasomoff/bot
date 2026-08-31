@@ -13,7 +13,9 @@ from app.repositories.knowledge_base import KnowledgeBaseRepository
 from app.services.answer import (
     NO_MATCH_RESPONSE,
     NO_MATCH_RESPONSES,
+    START_RESPONSES,
     generate_answer,
+    is_client_command,
 )
 from app.services.guardrail import EMERGENCY_RESPONSES
 from tests.conftest import Seed, isolated_settings
@@ -599,6 +601,61 @@ async def test_no_facts_section_appears_when_nothing_is_configured(
 
     assert "These clinic details are given to you as fact" not in system_prompt
     assert "Address:" not in system_prompt
+
+
+# --- the chat client's own buttons, not something a patient typed ---
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["/start", "/START", "  /start  ", "/start@medasistebot", "/help"],
+)
+def test_a_bare_client_command_is_recognised(message: str) -> None:
+    """Telegram sends "/start" when somebody opens the chat and presses the
+    button, addresses it to a named bot in groups, and clients pad it.
+    """
+    assert is_client_command(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["/start bugun qabulga yozilsam", "salom", "startga bosdim", "/", "buyragim og'riyapti"],
+)
+def test_anything_a_patient_actually_wrote_is_left_to_the_model(message: str) -> None:
+    """A patient who types past the command has said something, and swallowing
+    it would lose the only thing they wrote.
+    """
+    assert not is_client_command(message)
+
+
+async def test_pressing_start_greets_once_without_asking_the_model(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """The bug this fixes was the clinic's first impression: "/start" went to
+    the model, which greeted in Cyrillic, and the patient's own "Salom" a
+    moment later drew a second greeting in Latin. Two hellos, two alphabets.
+
+    Answering it here also spends no daily model allowance on the one message
+    whose reply is entirely predictable.
+    """
+    llm_provider = FakeLLMProvider()
+
+    with as_tenant(seed.tenant_a.id):
+        reply = await generate_answer(
+            db_session,
+            "/start",
+            embedding_provider=FakeEmbeddingProvider(QUERY_VECTOR),
+            llm_provider=llm_provider,
+            settings=_settings(answer_without_faq=True),
+        )
+
+    assert reply == START_RESPONSES["uz-latn"]
+    assert llm_provider.calls == []
+    # One greeting, in the clinic's own alphabet.
+    assert "Assalom alaykum" in reply
+    assert "Ассалом" not in reply
 
 
 # --- the clinic's own clinicians ---

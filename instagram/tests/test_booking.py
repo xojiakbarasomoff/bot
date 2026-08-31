@@ -134,6 +134,36 @@ def test_slots_are_grouped_by_day_so_today_and_tomorrow_are_distinguishable() ->
     assert "2026-09-08: 09:00" in rendered
 
 
+def test_today_and_tomorrow_are_named_rather_than_left_to_be_worked_out() -> None:
+    """Asked to derive the day word from the date, the model got it backwards
+    in the direction that costs a booking: on 31 August a patient was offered
+    "ertaga 2026-08-31", said no to a day that was actually today, and the
+    slot everyone thought was agreed was never written down.
+
+    The date stays on the line because rule 8's marker is written from it.
+    """
+    rendered = render(
+        [_local(2026, 9, 7, 18, 0), _local(2026, 9, 8, 9, 0), _local(2026, 9, 9, 9, 0)],
+        _local(2026, 9, 7, 12, 40),
+    )
+
+    assert "TODAY — Monday 2026-09-07: 18:00" in rendered
+    assert "TOMORROW — Tuesday 2026-09-08: 09:00" in rendered
+    # The third day gets no word: "u kun" is not a thing every language has,
+    # and a wrong one is worse than none.
+    assert "Wednesday 2026-09-09: 09:00" in rendered
+    assert "TODAY — Wednesday" not in rendered
+
+
+def test_the_patient_is_not_read_a_machine_readable_date() -> None:
+    """ "ertaga 2026-09-01 kuni soat 09:00" is what the model wrote unprompted,
+    and it reads as notes rather than as somebody typing.
+    """
+    rendered = render([_local(2026, 9, 7, 18, 0)], _local(2026, 9, 7, 12, 40))
+
+    assert "Never read a date out" in rendered
+
+
 def test_an_empty_diary_tells_the_model_not_to_offer_anything() -> None:
     """Without this the model has an empty list and a rule telling it to
     offer a time, which is the shape that produces an invented one.

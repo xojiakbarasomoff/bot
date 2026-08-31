@@ -165,6 +165,24 @@ async def free_slots(
     return slots
 
 
+def _day_label(slot: datetime, local_now: datetime) -> str:
+    """How one day of the book is headed.
+
+    "Today" and "tomorrow" are spelled out rather than left to be worked out
+    from the date. Asked to do that arithmetic itself the model gets it wrong
+    in the direction that costs a booking: a patient was told "ertaga
+    2026-08-31" on 31 August, said no, and the slot the front desk thought was
+    agreed was never written down.
+
+    The date stays alongside the word, because the marker in rule 8 is written
+    from it and a label alone would leave nothing to write.
+    """
+    days = (slot.date() - local_now.date()).days
+    named = {0: "TODAY", 1: "TOMORROW"}.get(days)
+    dated = f"{slot:%A %Y-%m-%d}"
+    return f"{named} — {dated}" if named else dated
+
+
 def render(slots: Sequence[datetime], now: datetime) -> str:
     """The free slots as a prompt section, in clinic-local time.
 
@@ -197,12 +215,16 @@ def render(slots: Sequence[datetime], now: datetime) -> str:
     by_day: dict[str, list[str]] = {}
     for slot in slots:
         local = slot.astimezone(CLINIC_TIMEZONE)
-        by_day.setdefault(f"{local:%A %Y-%m-%d}", []).append(f"{local:%H:%M}")
+        by_day.setdefault(_day_label(local, local_now), []).append(f"{local:%H:%M}")
 
     lines = [f"- {day}: {', '.join(times)}" for day, times in by_day.items()]
     return (
         f"{header}\n- These slots are free, and only these. Each lasts 30 minutes.\n"
         + "\n".join(lines)
+        + '\n- Say the day the way a person would — "bugun", "ertaga", '
+        '"1-sentabr". Never read a date out in 2026-09-01 form: a patient '
+        'being told to come on "ertaga 2026-08-31" is being handed a '
+        "machine's notes."
     )
 
 
