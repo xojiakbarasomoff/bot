@@ -58,6 +58,7 @@ from app.services.sheets import (
     summarise_problem,
 )
 from app.services.token_refresh import refresh_instagram_tokens
+from app.services.webhook_watch import verify_telegram_webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -402,6 +403,34 @@ async def refresh_channel_tokens(
         )
 
 
+async def verify_channel_webhooks(
+    ctx: dict[str, Any],
+    *,
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]] = db_session,
+) -> None:
+    """Cron job: make sure Telegram is still delivering to this deployment.
+
+    Unlike the token job, this guards against something that can happen at
+    any moment rather than on a known schedule -- anything holding the bot
+    token can clear the registration, and nothing on this side notices,
+    because the symptom is the absence of traffic. Frequent and cheap: the
+    check is one read-only call per bot and only writes when the answer is
+    wrong.
+    """
+    async with session_factory() as session:
+        run = await verify_telegram_webhooks(
+            session, public_base_url=get_settings().public_base_url
+        )
+    if run.notable:
+        logger.info(
+            "telegram_webhook_watch_run ok=%d repaired=%d skipped=%d failed=%d",
+            run.ok,
+            run.repaired,
+            run.skipped,
+            run.failed,
+        )
+
+
 # The worker is a separate process from the web app, so it needs its own
 # handler installed -- app.main's call never runs here.
 configure_logging()
@@ -420,5 +449,9 @@ class WorkerSettings:
         # 03:20 rather than on the hour: nothing else the clinic depends
         # on runs then, and Meta is quietest.
         cron(refresh_channel_tokens, hour={3}, minute={20}),
+        # Every ten minutes. A cleared webhook is a total outage on that
+        # channel, so the interval is really the worst case a patient
+        # waits before the bot can hear them again.
+        cron(verify_channel_webhooks, minute=set(range(0, 60, 10))),
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
