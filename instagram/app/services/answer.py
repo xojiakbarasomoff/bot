@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.models.doctor import Doctor
 from app.rag.embeddings import EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider, get_llm_provider
 from app.rag.retrieval import retrieve_relevant_faqs
@@ -211,8 +212,9 @@ exactly one easy way forward: a question they can answer in two words, or \
 a concrete time. One. A reply that answers nothing and only pushes is a \
 worse failure than one that answers and stops.
 
-Read what is behind the message. Pain, bleeding, swelling, a broken tooth, \
-"shoshilinch", "juda og'riyapti" — that patient does not want a price \
+Read what is behind the message. Pain, blood in the urine, a fever with \
+back pain, being unable to pass water at all, "shoshilinch", "juda \
+og'riyapti" — that patient does not want a price \
 list, they want to be seen today. Offer the soonest free time first and \
 leave the price for when they ask. Somebody comparing prices is a \
 different person: answer plainly, then give them a reason to come in \
@@ -380,14 +382,64 @@ def _format_faq_context(matches: Sequence[KnowledgeBaseMatch]) -> str:
     )
 
 
-def _clinic_facts_block(clinic_address: str | None, clinic_phone_numbers: str | None) -> str:
-    """The handful of clinic facts that come from configuration rather than
-    from the knowledge base, rendered as a prompt section -- or "" when none
-    are configured.
+def _doctor_roster(doctors: Sequence[Doctor]) -> str:
+    """The clinic's clinicians, as prompt lines -- or "" when none are listed.
 
-    Both prompts otherwise forbid stating an address or a phone number at all,
-    which is the right default when the only source is retrieval: a made-up
-    address sends a patient across Tashkent to a building that isn't there.
+    "Kim qabul qiladi?" is one of the first things a patient asks, and until
+    now the only honest answer was that we did not know: the roster was read
+    on every message to work out how many bookings a slot holds, and then
+    thrown away. Both rule 1s forbid stating the clinic's staff, so the model
+    was refusing a question the database could answer.
+
+    Rendered from the live rows rather than written into a FAQ entry, because
+    a roster is not a fact that stays still. A doctor who leaves is
+    deactivated in the dashboard, and this stops naming them on the next
+    message -- where a seeded answer would keep offering a clinician who no
+    longer works there until somebody remembered to edit it.
+
+    Only what the front desk would say out loud: who they are, what they do,
+    when they are in. Not the phone number on the row, which is the clinic's
+    internal line to the doctor.
+    """
+    if not doctors:
+        return ""
+    lines = "\n".join(
+        f"- {doctor.name} — {doctor.specialty} — {doctor.working_hours}" for doctor in doctors
+    )
+    return (
+        "\n\nThe clinicians currently seeing patients here, given to you as "
+        "fact:\n"
+        f"{lines}\n"
+        "You may name them and say what each one does and when they work. "
+        "This is the whole list: never name a doctor who is not on it, and "
+        "never add anything to what is written about the ones who are — not "
+        "their experience, their qualifications, where they studied, which "
+        "conditions they are best with, nor any opinion of which of them a "
+        "patient should see. You do not know those things, and a patient "
+        "chooses a clinician on exactly that kind of claim.\n"
+        "Working hours here mean the days and times that doctor is in the "
+        "building. They are not free appointment times: only THE APPOINTMENT "
+        "BOOK below says what is actually free. And do not promise a patient "
+        "a particular doctor for a particular slot — who sees them is settled "
+        "by the front desk when the booking is written in, not in this chat."
+    )
+
+
+def _clinic_facts_block(
+    clinic_address: str | None,
+    clinic_phone_numbers: str | None,
+    doctors: Sequence[Doctor] = (),
+) -> str:
+    """The handful of clinic facts that come from configuration and from the
+    clinic's own tables rather than from the knowledge base, rendered as a
+    prompt section -- or "" when there are none.
+
+    Both prompts otherwise forbid stating an address, a phone number or who
+    works here at all, which is the right default when the only source is
+    retrieval: a made-up address sends a patient across Tashkent to a
+    building that isn't there, and an invented doctor is worse still, because
+    the patient arrives asking for somebody by name.
+
     These are exempt because an operator typed them, not because the model
     knows them, so they are presented as given facts and rule 1 on each path
     is written to permit exactly what appears here and nothing more.
@@ -397,8 +449,13 @@ def _clinic_facts_block(clinic_address: str | None, clinic_phone_numbers: str | 
         lines.append(f"Address: {clinic_address}")
     if clinic_phone_numbers:
         lines.append(f"Phone: {clinic_phone_numbers}")
+
+    roster = _doctor_roster(doctors)
     if not lines:
-        return ""
+        # The closing "these are the only details" sentence belongs to the
+        # address-and-phone list and would be false standing on its own, so
+        # with no configured details the roster is the whole block.
+        return roster
 
     detail_lines = "\n".join(lines)
     return (
@@ -408,7 +465,7 @@ def _clinic_facts_block(clinic_address: str | None, clinic_phone_numbers: str | 
         f"{detail_lines}\n"
         "These are the only details of this clinic you have been given "
         "directly. Do not treat anything else about it as known on the "
-        "strength of them."
+        "strength of them." + roster
     )
 
 
@@ -454,13 +511,14 @@ def _build_system_prompt(
     clinic_address: str | None,
     signals: ConversationSignals,
     appointment_book: str,
+    doctors: Sequence[Doctor] = (),
 ) -> str:
     price_contact, price_contact_gloss = _price_contact_clause(clinic_phone_numbers)
     shared = {
         "default_language": default_language,
         "price_contact": price_contact,
         "price_contact_gloss": price_contact_gloss,
-        "clinic_facts": _clinic_facts_block(clinic_address, clinic_phone_numbers),
+        "clinic_facts": _clinic_facts_block(clinic_address, clinic_phone_numbers, doctors),
     }
     if matches:
         prompt = _SYSTEM_PROMPT_TEMPLATE.format(faq_context=_format_faq_context(matches), **shared)
@@ -540,6 +598,7 @@ async def generate_answer(
     system_prompt = _build_system_prompt(
         matches,
         appointment_book=render_book(book, datetime.now(UTC)),
+        doctors=doctors,
         signals=read_signals(history, user_message),
         flagged_as_medical_advice=guardrail.category is GuardrailCategory.MEDICAL_ADVICE,
         default_language=resolved_settings.default_reply_language,

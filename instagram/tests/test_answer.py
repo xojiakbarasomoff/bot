@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from uuid import UUID
 
@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.models.doctor import Doctor
 from app.rag.embeddings import EMBEDDING_DIMENSIONS, EmbeddingProvider
 from app.rag.llm import ChatMessage, LLMProvider
 from app.repositories.knowledge_base import KnowledgeBaseRepository
@@ -248,6 +249,7 @@ async def _capture_system_prompt(
     as_tenant: Callable[[UUID], AbstractContextManager[None]],
     *,
     with_faq: bool,
+    doctors: Sequence[tuple[str, str, str]] = (),
     **settings_overrides: object,
 ) -> str:
     """Run generate_answer far enough to grab the system prompt it built.
@@ -263,6 +265,17 @@ async def _capture_system_prompt(
     with as_tenant(seed.tenant_a.id):
         if with_faq:
             await _make_faq(db_session, "What are your hours?", "9 to 5, Mon-Sat.")
+        for name, specialty, hours in doctors:
+            db_session.add(
+                Doctor(
+                    tenant_id=seed.tenant_a.id,
+                    name=name,
+                    specialty=specialty,
+                    working_hours=hours,
+                    is_active=True,
+                )
+            )
+        await db_session.flush()
         await generate_answer(
             db_session,
             "Assalom alaykum",
@@ -586,6 +599,110 @@ async def test_no_facts_section_appears_when_nothing_is_configured(
 
     assert "These clinic details are given to you as fact" not in system_prompt
     assert "Address:" not in system_prompt
+
+
+# --- the clinic's own clinicians ---
+
+ROSTER = [
+    ("Dr. Aliyev A.A.", "Urolog", "09:00 - 18:00 (Du-Ju)"),
+    ("Dr. Karimova N.S.", "Urolog-androlog", "09:00 - 17:00 (Du-Ju)"),
+]
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_the_clinics_doctors_are_given_to_the_model_as_fact(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """ "Kim qabul qiladi?" is one of the first things a patient asks. The
+    roster was already being read on every message to size the appointment
+    book, and then thrown away, so both prompts' "you do not know this
+    clinic's staff" rule made the bot refuse a question the database could
+    answer.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq, doctors=ROSTER
+    )
+
+    for name, specialty, hours in ROSTER:
+        assert f"- {name} — {specialty} — {hours}" in system_prompt
+    assert "currently seeing patients here, given to you as fact" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_the_roster_is_a_closed_list_with_nothing_added_to_it(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """A name, a specialty and working hours is all the clinic said. Years of
+    experience, where somebody trained, or which of them a patient "should"
+    see are exactly the claims a patient picks a clinician on, and exactly
+    what a model will supply unprompted.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq, doctors=ROSTER
+    )
+
+    assert "never name a doctor who is not on it" in system_prompt
+    assert "their experience, their qualifications, where they studied" in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_working_hours_are_not_offered_as_free_appointment_times(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """ "09:00 - 18:00" is when the doctor is in the building, not when the
+    diary is empty. Read as availability it would have the bot offering hours
+    that are already booked, and promising a named clinician for a slot the
+    front desk assigns at settle time.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=with_faq, doctors=ROSTER
+    )
+
+    assert "They are not free appointment times" in system_prompt
+    assert "do not promise a patient a particular doctor" in system_prompt
+
+
+async def test_the_roster_survives_a_clinic_with_no_configured_details(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+) -> None:
+    """Address and phone come from the environment, the roster from the
+    database, and neither depends on the other. A deployment with no
+    CLINIC_ADDRESS set must still be able to say who works there.
+    """
+    system_prompt = await _capture_system_prompt(
+        db_session, seed, as_tenant, with_faq=False, doctors=ROSTER
+    )
+
+    assert "These clinic details are given to you as fact" not in system_prompt
+    assert "Address:" not in system_prompt
+    assert "Dr. Aliyev A.A." in system_prompt
+
+
+@pytest.mark.parametrize("with_faq", [True, False], ids=["with_faq", "without_faq"])
+async def test_a_clinic_that_has_listed_no_doctors_claims_none(
+    db_session: AsyncSession,
+    seed: Seed,
+    as_tenant: Callable[[UUID], AbstractContextManager[None]],
+    with_faq: bool,
+) -> None:
+    """An empty heading is an invitation to fill it in, and an invented
+    urologist is worse than a made-up address: the patient arrives asking for
+    somebody by name.
+    """
+    system_prompt = await _capture_system_prompt(db_session, seed, as_tenant, with_faq=with_faq)
+
+    assert "currently seeing patients here" not in system_prompt
 
 
 # --- medical-advice: still goes through the LLM, with redirect framing enforced ---
